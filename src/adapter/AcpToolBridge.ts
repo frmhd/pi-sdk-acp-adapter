@@ -97,7 +97,6 @@ async function pollTerminalToCompletion(
   options?: { signal?: AbortSignal },
 ): Promise<TerminalPollResult> {
   let lastOutputLength = 0;
-  let pollInterval: NodeJS.Timeout | undefined;
   let resolved = false;
 
   // Store accumulated output
@@ -106,7 +105,6 @@ async function pollTerminalToCompletion(
   // Set up abort handler
   const abortHandler = () => {
     resolved = true;
-    if (pollInterval) clearInterval(pollInterval);
   };
 
   if (options?.signal) {
@@ -115,9 +113,8 @@ async function pollTerminalToCompletion(
 
   // Start polling for output
   return new Promise<TerminalPollResult>((resolve, reject) => {
-    pollInterval = setInterval(async () => {
+    const poll = async () => {
       if (resolved) {
-        if (pollInterval) clearInterval(pollInterval);
         return;
       }
 
@@ -134,27 +131,31 @@ async function pollTerminalToCompletion(
         // Check if process has exited
         if (output.exitStatus !== undefined) {
           resolved = true;
-          if (pollInterval) clearInterval(pollInterval);
 
           const exitCode =
             output.exitStatus?.exited === true ? (output.exitStatus.exitCode ?? null) : null;
 
           resolve({ output: accumulatedOutput, exitCode });
+          return;
         }
+
+        // Schedule next poll
+        setTimeout(poll, TERMINAL_POLL_INTERVAL);
       } catch (err) {
         resolved = true;
-        if (pollInterval) clearInterval(pollInterval);
         reject(err);
       }
-    }, TERMINAL_POLL_INTERVAL);
+    };
 
-    // Also wait for exit
+    // Start polling
+    void poll();
+
+    // Also wait for exit as a backup
     terminal
       .waitForExit()
       .then((exitResponse) => {
         if (resolved) return;
         resolved = true;
-        if (pollInterval) clearInterval(pollInterval);
 
         // Final output fetch
         terminal
@@ -176,7 +177,6 @@ async function pollTerminalToCompletion(
       .catch((err) => {
         if (resolved) return;
         resolved = true;
-        if (pollInterval) clearInterval(pollInterval);
         reject(err);
       });
   }).finally(() => {
@@ -230,7 +230,6 @@ export class AcpTerminalOperations implements BashOperations {
     });
 
     let lastOutputLength = 0;
-    let pollInterval: NodeJS.Timeout | undefined;
     let killed = false;
     let resolved = false;
 
@@ -238,9 +237,8 @@ export class AcpTerminalOperations implements BashOperations {
     const shouldStop = () => killed || signal?.aborted || resolved;
 
     // Start polling for output
-    pollInterval = setInterval(async () => {
+    const poll = async () => {
       if (shouldStop()) {
-        if (pollInterval) clearInterval(pollInterval);
         return;
       }
 
@@ -257,18 +255,23 @@ export class AcpTerminalOperations implements BashOperations {
         // Check if process has exited
         if (output.exitStatus !== undefined) {
           resolved = true;
-          if (pollInterval) clearInterval(pollInterval);
+          return;
         }
+
+        // Schedule next poll
+        setTimeout(poll, TERMINAL_POLL_INTERVAL);
       } catch {
-        if (pollInterval) clearInterval(pollInterval);
+        // Stop polling on error
       }
-    }, TERMINAL_POLL_INTERVAL);
+    };
+
+    // Start polling
+    void poll();
 
     // Set up abort handler
     const abortHandler = () => {
       killed = true;
       void terminal.kill();
-      if (pollInterval) clearInterval(pollInterval);
     };
 
     if (signal) {
@@ -288,7 +291,6 @@ export class AcpTerminalOperations implements BashOperations {
       const exitResponse = await terminal.waitForExit();
       resolved = true;
 
-      if (pollInterval) clearInterval(pollInterval);
       if (timeoutHandle) clearTimeout(timeoutHandle);
 
       return { exitCode: exitResponse.exitCode ?? null };
@@ -455,52 +457,6 @@ export class AcpGrepOperations implements GrepOperations {
     const buffer = await this.readOps.readFile(absolutePath);
     return buffer.toString("utf-8");
   }
-
-  /**
-   * Perform grep search using terminal command.
-   */
-  async grep(options: {
-    pattern: string;
-    path?: string;
-    glob?: string;
-    ignoreCase?: boolean;
-    literal?: boolean;
-    context?: number;
-    limit?: number;
-  }): Promise<string[]> {
-    // Build grep command with proper flags
-    const flags: string[] = [];
-    if (options.ignoreCase) flags.push("-i");
-    if (options.literal) flags.push("-F");
-    if (options.context) flags.push(`-C${options.context}`);
-
-    // Build the grep command
-    const searchDir = options.path || ".";
-    const globPart = options.glob ? `--glob=${escapeBash(options.glob)}` : "";
-    const flagsPart = flags.join(" ");
-
-    const cmd = `grep ${flagsPart} ${globPart} ${escapeBash(options.pattern)} ${escapeBash(searchDir)} 2>/dev/null || true`;
-
-    try {
-      const terminal = await this.client.createTerminal({
-        command: cmd,
-        cwd: searchDir,
-        sessionId: this.client.sessionId,
-      });
-
-      try {
-        const result = await pollTerminalToCompletion(terminal);
-        const lines = result.output.split("\n").filter((line) => line.trim() !== "");
-
-        return options.limit ? lines.slice(0, options.limit) : lines;
-      } finally {
-        terminal.release().catch(() => {});
-      }
-    } catch {
-      // Fallback: return empty results if grep fails
-      return [];
-    }
-  }
 }
 
 // =============================================================================
@@ -573,17 +529,6 @@ export class AcpFindOperations {
     } catch {
       return [];
     }
-  }
-
-  /**
-   * Legacy find method for backwards compatibility or direct use
-   * @deprecated Use glob() instead
-   */
-  async find(options: { pattern?: string; path?: string; limit?: number }): Promise<string[]> {
-    return this.glob(options.pattern || "*", options.path || ".", {
-      ignore: [],
-      limit: options.limit || 100,
-    });
   }
 }
 

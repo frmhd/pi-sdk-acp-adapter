@@ -312,10 +312,9 @@ export class AcpAgent implements Agent {
     } catch (error) {
       console.error(`Prompt error for session ${params.sessionId}:`, error);
 
-      // Return error stop reason
-      return {
-        stopReason: "end_turn",
-      };
+      // Re-throw so the ACP SDK reports the error as a protocol failure.
+      // Returning 'end_turn' would make the client think the agent completed normally.
+      throw error;
     } finally {
       unsubscribe();
     }
@@ -398,11 +397,14 @@ export class AcpAgent implements Agent {
    * Close a session (experimental ACP capability).
    *
    * Cleans up the session and removes it from the session map.
-   * Bug 5 fix: Prevents memory leak from accumulating sessions.
+   * Prevents memory leak from accumulating sessions.
+   *
+   * MUST be named `unstable_closeSession` — that is the method name the
+   * ACP SDK calls when the client sends a session/close request.
    *
    * @param params - Close session request with session ID
    */
-  async close(params: CloseSessionRequest): Promise<CloseSessionResponse> {
+  async unstable_closeSession(params: CloseSessionRequest): Promise<CloseSessionResponse> {
     const sessionState = this.sessions.get(params.sessionId);
 
     if (sessionState) {
