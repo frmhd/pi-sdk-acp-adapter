@@ -6,12 +6,14 @@
  */
 
 import type { ToolCallContent, ToolKind, TerminalHandle } from "@agentclientprotocol/sdk";
+import type { EnvVariable } from "@agentclientprotocol/sdk";
 
 import type {
   BashOperations,
   ReadOperations,
   WriteOperations,
   LsOperations,
+  GrepOperations,
 } from "@mariozechner/pi-coding-agent";
 
 import { createToolCallContent, mapToolKind } from "./types.js";
@@ -59,20 +61,129 @@ export interface ToolBridgeConfig<TInput> {
 
 /** Subset of AgentSideConnection used by the tool bridge */
 export interface AcpClientInterface {
+  /** Session ID for terminal requests */
+  sessionId: string;
   /** Create a terminal and execute a command */
   createTerminal(params: {
     command: string;
-    cwd: string;
-    terminalId?: string;
-    env?: [string, string][];
-    size?: { cols: number; rows: number };
+    cwd?: string;
+    env?: EnvVariable[];
+    sessionId: string;
   }): Promise<TerminalHandle>;
   /** Read a text file */
   readTextFile(params: { path: string }): Promise<{ content: string }>;
   /** Write a text file */
   writeTextFile(params: { path: string; content: string }): Promise<void>;
-  /** Check if terminal creation is supported */
-  supportsTerminal?(): boolean;
+}
+
+// =============================================================================
+// Terminal Polling Helper
+// =============================================================================
+
+/**
+ * Result from polling a terminal for output
+ */
+interface TerminalPollResult {
+  output: string;
+  exitCode: number | null;
+}
+
+/**
+ * Poll terminal until completion and collect output.
+ * Handles cumulative output correctly (only captures deltas).
+ */
+async function pollTerminalToCompletion(
+  terminal: TerminalHandle,
+  options?: { signal?: AbortSignal },
+): Promise<TerminalPollResult> {
+  let lastOutputLength = 0;
+  let pollInterval: NodeJS.Timeout | undefined;
+  let resolved = false;
+
+  // Store accumulated output
+  let accumulatedOutput = "";
+
+  // Set up abort handler
+  const abortHandler = () => {
+    resolved = true;
+    if (pollInterval) clearInterval(pollInterval);
+  };
+
+  if (options?.signal) {
+    options.signal.addEventListener("abort", abortHandler);
+  }
+
+  // Start polling for output
+  return new Promise<TerminalPollResult>((resolve, reject) => {
+    pollInterval = setInterval(async () => {
+      if (resolved) {
+        if (pollInterval) clearInterval(pollInterval);
+        return;
+      }
+
+      try {
+        const output = await terminal.currentOutput();
+
+        // Get new output since last check (handle cumulative output)
+        if (output.output.length > lastOutputLength) {
+          const newOutput = output.output.slice(lastOutputLength);
+          accumulatedOutput += newOutput;
+          lastOutputLength = output.output.length;
+        }
+
+        // Check if process has exited
+        if (output.exitStatus !== undefined) {
+          resolved = true;
+          if (pollInterval) clearInterval(pollInterval);
+
+          const exitCode =
+            output.exitStatus?.exited === true ? (output.exitStatus.exitCode ?? null) : null;
+
+          resolve({ output: accumulatedOutput, exitCode });
+        }
+      } catch (err) {
+        resolved = true;
+        if (pollInterval) clearInterval(pollInterval);
+        reject(err);
+      }
+    }, TERMINAL_POLL_INTERVAL);
+
+    // Also wait for exit
+    terminal
+      .waitForExit()
+      .then((exitResponse) => {
+        if (resolved) return;
+        resolved = true;
+        if (pollInterval) clearInterval(pollInterval);
+
+        // Final output fetch
+        terminal
+          .currentOutput()
+          .then((finalOutput) => {
+            if (finalOutput.output.length > lastOutputLength) {
+              const newOutput = finalOutput.output.slice(lastOutputLength);
+              accumulatedOutput += newOutput;
+            }
+
+            const exitCode = exitResponse.exited ? (exitResponse.exitCode ?? null) : null;
+            resolve({ output: accumulatedOutput, exitCode });
+          })
+          .catch(() => {
+            const exitCode = exitResponse.exited ? (exitResponse.exitCode ?? null) : null;
+            resolve({ output: accumulatedOutput, exitCode });
+          });
+      })
+      .catch((err) => {
+        if (resolved) return;
+        resolved = true;
+        if (pollInterval) clearInterval(pollInterval);
+        reject(err);
+      });
+  }).finally(() => {
+    if (options?.signal) {
+      options.signal.removeEventListener("abort", abortHandler);
+    }
+  });
 }
 
 // =============================================================================
@@ -103,13 +214,19 @@ export class AcpTerminalOperations implements BashOperations {
   ): Promise<{ exitCode: number | null }> {
     const { onData, signal, timeout } = options;
 
+    // Convert env to ACP format (filter out undefined values)
+    const env: EnvVariable[] | undefined = options.env
+      ? Object.entries(options.env)
+          .filter(([, value]) => value !== undefined)
+          .map(([name, value]) => ({ name, value: value as string }))
+      : undefined;
+
     // Create terminal via ACP client
     const terminal = await this.client.createTerminal({
       command,
       cwd,
-      terminalId: undefined, // Client will generate one
-      env: options.env ? (Object.entries(options.env) as [string, string][]) : undefined,
-      size: { cols: 80, rows: 24 },
+      env,
+      sessionId: this.client.sessionId,
     });
 
     let lastOutputLength = 0;
@@ -130,7 +247,7 @@ export class AcpTerminalOperations implements BashOperations {
       try {
         const output = await terminal.currentOutput();
 
-        // Get new output since last check
+        // Get new output since last check (output is cumulative)
         if (output.output.length > lastOutputLength) {
           const newOutput = output.output.slice(lastOutputLength);
           onData(Buffer.from(newOutput, "utf-8"));
@@ -235,16 +352,17 @@ export class AcpWriteOperations implements WriteOperations {
   }
 
   async mkdir(dir: string): Promise<void> {
-    // ACP doesn't have a dedicated mkdir method, so we use writeTextFile
-    // with empty content to create the directory via the client's filesystem
-    // Note: This may need to be handled differently based on client capabilities
+    // Use terminal to create directory with mkdir -p
+    const terminal = await this.client.createTerminal({
+      command: `mkdir -p ${escapeBash(dir)}`,
+      cwd: dir,
+      sessionId: this.client.sessionId,
+    });
+
     try {
-      await this.client.writeTextFile({
-        path: dir.replace(/[/\\]*$/, "") + "/.pi-mkdir-placeholder",
-        content: "",
-      });
-    } catch {
-      // Ignore - directory may already exist or client handles mkdir differently
+      await pollTerminalToCompletion(terminal);
+    } finally {
+      terminal.release().catch(() => {});
     }
   }
 }
@@ -294,14 +412,53 @@ export class AcpEditOperations {
 /**
  * ACP Grep Operations
  * Uses find + read to perform grep-like operations via the ACP client.
+ * Implements GrepOperations interface for Pi tool integration.
  */
-export class AcpGrepOperations {
+export class AcpGrepOperations implements GrepOperations {
   private client: AcpClientInterface;
+  private readOps: AcpReadOperations;
 
   constructor(client: AcpClientInterface) {
     this.client = client;
+    this.readOps = new AcpReadOperations(client);
   }
 
+  /**
+   * Check if path is a directory.
+   * Uses test command to check if path is a directory.
+   */
+  async isDirectory(absolutePath: string): Promise<boolean> {
+    const cmd = `test -d ${escapeBash(absolutePath)} && echo "true" || echo "false"`;
+
+    try {
+      const terminal = await this.client.createTerminal({
+        command: cmd,
+        cwd: absolutePath,
+        sessionId: this.client.sessionId,
+      });
+
+      try {
+        const result = await pollTerminalToCompletion(terminal);
+        return result.output.trim().includes("true");
+      } finally {
+        terminal.release().catch(() => {});
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Read file contents for context lines.
+   */
+  async readFile(absolutePath: string): Promise<string> {
+    const buffer = await this.readOps.readFile(absolutePath);
+    return buffer.toString("utf-8");
+  }
+
+  /**
+   * Perform grep search using terminal command.
+   */
   async grep(options: {
     pattern: string;
     path?: string;
@@ -311,72 +468,34 @@ export class AcpGrepOperations {
     context?: number;
     limit?: number;
   }): Promise<string[]> {
-    // For grep, we need to search file contents
-    // ACP doesn't have a dedicated grep method, so we implement it via terminal
-    // This is a fallback - ideally the client should support native grep
-    const flags = options.ignoreCase ? "-i" : "";
-    const literalFlag = options.literal ? "-F" : "";
-    const contextFlag = options.context ? `-C${options.context}` : "";
+    // Build grep command with proper flags
+    const flags: string[] = [];
+    if (options.ignoreCase) flags.push("-i");
+    if (options.literal) flags.push("-F");
+    if (options.context) flags.push(`-C${options.context}`);
 
+    // Build the grep command
     const searchDir = options.path || ".";
-    const cmd = `grep ${flags} ${literalFlag} ${contextFlag} ${escapeBash(options.pattern)} ${escapeBash(searchDir)} 2>/dev/null || true`;
+    const globPart = options.glob ? `--glob=${escapeBash(options.glob)}` : "";
+    const flagsPart = flags.join(" ");
 
-    let lastOutputLength = 0;
+    const cmd = `grep ${flagsPart} ${globPart} ${escapeBash(options.pattern)} ${escapeBash(searchDir)} 2>/dev/null || true`;
 
     try {
       const terminal = await this.client.createTerminal({
         command: cmd,
         cwd: searchDir,
-        terminalId: undefined,
-        size: { cols: 80, rows: 24 },
+        sessionId: this.client.sessionId,
       });
 
-      const results: string[] = [];
-      let resolved = false;
+      try {
+        const result = await pollTerminalToCompletion(terminal);
+        const lines = result.output.split("\n").filter((line) => line.trim() !== "");
 
-      // Poll for output
-      const pollInterval = setInterval(async () => {
-        if (resolved) {
-          clearInterval(pollInterval);
-          return;
-        }
-
-        try {
-          const output = await terminal.currentOutput();
-
-          // Get new output since last check
-          if (output.output.length > lastOutputLength) {
-            const newOutput = output.output.slice(lastOutputLength);
-            results.push(newOutput);
-            lastOutputLength = output.output.length;
-          }
-
-          // Check if process has exited
-          if (output.exitStatus !== undefined) {
-            resolved = true;
-            clearInterval(pollInterval);
-          }
-        } catch {
-          resolved = true;
-          clearInterval(pollInterval);
-        }
-      }, TERMINAL_POLL_INTERVAL);
-
-      await terminal.waitForExit();
-      resolved = true;
-
-      if (pollInterval) clearInterval(pollInterval);
-
-      const output = results.join("");
-      const lines = output.split("\n").filter((line) => line.trim() !== "");
-
-      terminal.release().catch(() => {});
-
-      if (options.limit) {
-        return lines.slice(0, options.limit);
+        return options.limit ? lines.slice(0, options.limit) : lines;
+      } finally {
+        terminal.release().catch(() => {});
       }
-
-      return lines;
     } catch {
       // Fallback: return empty results if grep fails
       return [];
@@ -400,32 +519,22 @@ export class AcpFindOperations {
   }
 
   async exists(absolutePath: string): Promise<boolean> {
-    const cmd = `ls -d ${escapeBash(absolutePath)} 2>/dev/null && echo "exists" || echo "not_found"`;
+    // Use test -e which is more reliable across BSD/GNU
+    const cmd = `test -e ${escapeBash(absolutePath)} && echo "true" || echo "false"`;
 
     try {
       const terminal = await this.client.createTerminal({
         command: cmd,
-        cwd: ".",
-        terminalId: undefined,
-        size: { cols: 80, rows: 24 },
+        cwd: absolutePath,
+        sessionId: this.client.sessionId,
       });
 
-      const results: string[] = [];
-      const pollInterval = setInterval(async () => {
-        try {
-          const output = await terminal.currentOutput();
-          if (output.output) results.push(output.output);
-          if (output.exitStatus !== undefined) clearInterval(pollInterval);
-        } catch {
-          clearInterval(pollInterval);
-        }
-      }, 50);
-
-      await terminal.waitForExit();
-      clearInterval(pollInterval);
-      terminal.release().catch(() => {});
-
-      return results.join("").includes("exists");
+      try {
+        const result = await pollTerminalToCompletion(terminal);
+        return result.output.trim().includes("true");
+      } finally {
+        terminal.release().catch(() => {});
+      }
     } catch {
       return false;
     }
@@ -437,64 +546,30 @@ export class AcpFindOperations {
     options: { ignore: string[]; limit: number },
   ): Promise<string[]> {
     const searchPath = cwd || ".";
-    // Convert glob pattern to find -name pattern if possible, or just use find with -name
-    // Note: simple glob to find conversion
+    // Convert glob pattern to find -name pattern if possible
     const findPattern = pattern.startsWith("**/") ? pattern.slice(3) : pattern;
 
-    const cmd = `find ${escapeBash(searchPath)} -name ${escapeBash(findPattern)} -maxdepth 10 2>/dev/null | head -${options.limit || 100}`;
+    // Build ignore arguments for find (prune patterns)
+    const ignoreArgs = options.ignore
+      .filter((p) => p.startsWith("**/"))
+      .map((p) => `-not -path ${escapeBash(p.replace(/^\*\*\//, ""))}`)
+      .join(" ");
 
-    let lastOutputLength = 0;
+    const cmd = `find ${escapeBash(searchPath)} ${ignoreArgs} -name ${escapeBash(findPattern)} -maxdepth 10 2>/dev/null | head -${options.limit || 100}`;
 
     try {
       const terminal = await this.client.createTerminal({
         command: cmd,
         cwd: searchPath,
-        terminalId: undefined,
-        size: { cols: 80, rows: 24 },
+        sessionId: this.client.sessionId,
       });
 
-      const results: string[] = [];
-      let resolved = false;
-
-      // Poll for output
-      const pollInterval = setInterval(async () => {
-        if (resolved) {
-          clearInterval(pollInterval);
-          return;
-        }
-
-        try {
-          const output = await terminal.currentOutput();
-
-          // Get new output since last check
-          if (output.output.length > lastOutputLength) {
-            const newOutput = output.output.slice(lastOutputLength);
-            results.push(newOutput);
-            lastOutputLength = output.output.length;
-          }
-
-          // Check if process has exited
-          if (output.exitStatus !== undefined) {
-            resolved = true;
-            clearInterval(pollInterval);
-          }
-        } catch {
-          resolved = true;
-          clearInterval(pollInterval);
-        }
-      }, TERMINAL_POLL_INTERVAL);
-
-      await terminal.waitForExit();
-      resolved = true;
-
-      if (pollInterval) clearInterval(pollInterval);
-
-      terminal.release().catch(() => {});
-
-      return results
-        .join("")
-        .split("\n")
-        .filter((line) => line.trim() !== "");
+      try {
+        const result = await pollTerminalToCompletion(terminal);
+        return result.output.split("\n").filter((line) => line.trim() !== "");
+      } finally {
+        terminal.release().catch(() => {});
+      }
     } catch {
       return [];
     }
@@ -520,7 +595,7 @@ export class AcpFindOperations {
  * ACP Ls Operations
  * Lists directory contents via the ACP client.
  */
-export class AcpLsOperations {
+export class AcpLsOperations implements LsOperations {
   private client: AcpClientInterface;
 
   constructor(client: AcpClientInterface) {
@@ -528,84 +603,46 @@ export class AcpLsOperations {
   }
 
   async exists(absolutePath: string): Promise<boolean> {
-    // Use ls to check if path exists
-    const cmd = `ls -d ${escapeBash(absolutePath)} 2>/dev/null && echo "exists" || echo "not_found"`;
+    // Use test -e which is more reliable across BSD/GNU
+    const cmd = `test -e ${escapeBash(absolutePath)} && echo "true" || echo "false"`;
 
     try {
       const terminal = await this.client.createTerminal({
         command: cmd,
-        cwd: ".",
-        terminalId: undefined,
-        size: { cols: 80, rows: 24 },
+        cwd: absolutePath,
+        sessionId: this.client.sessionId,
       });
 
-      const results: string[] = [];
-
-      // Quick poll for output
-      const pollInterval = setInterval(async () => {
-        try {
-          const output = await terminal.currentOutput();
-          if (output.output) {
-            results.push(output.output);
-          }
-          if (output.exitStatus !== undefined) {
-            clearInterval(pollInterval);
-          }
-        } catch {
-          clearInterval(pollInterval);
-        }
-      }, 50);
-
-      await terminal.waitForExit();
-      clearInterval(pollInterval);
-      terminal.release().catch(() => {});
-
-      const output = results.join("");
-      return output.includes("exists");
+      try {
+        const result = await pollTerminalToCompletion(terminal);
+        return result.output.trim().includes("true");
+      } finally {
+        terminal.release().catch(() => {});
+      }
     } catch {
       return false;
     }
   }
 
   async stat(absolutePath: string): Promise<{ isDirectory: () => boolean }> {
-    // Use ls -la to check if it's a directory
-    const cmd = `ls -ld ${escapeBash(absolutePath)} 2>/dev/null`;
+    // Use test -d which is more reliable than parsing ls -ld output
+    const cmd = `test -d ${escapeBash(absolutePath)} && echo "true" || echo "false"`;
 
     try {
       const terminal = await this.client.createTerminal({
         command: cmd,
-        cwd: ".",
-        terminalId: undefined,
-        size: { cols: 80, rows: 24 },
+        cwd: absolutePath,
+        sessionId: this.client.sessionId,
       });
 
-      const results: string[] = [];
-
-      // Quick poll for output
-      const pollInterval = setInterval(async () => {
-        try {
-          const output = await terminal.currentOutput();
-          if (output.output) {
-            results.push(output.output);
-          }
-          if (output.exitStatus !== undefined) {
-            clearInterval(pollInterval);
-          }
-        } catch {
-          clearInterval(pollInterval);
-        }
-      }, 50);
-
-      await terminal.waitForExit();
-      clearInterval(pollInterval);
-      terminal.release().catch(() => {});
-
-      const output = results.join("");
-      const isDir = output.startsWith("d") || output.includes("/");
-
-      return {
-        isDirectory: () => isDir,
-      };
+      try {
+        const result = await pollTerminalToCompletion(terminal);
+        return {
+          isDirectory: () => result.output.trim().includes("true"),
+        };
+      } finally {
+        terminal.release().catch(() => {});
+      }
     } catch {
       return {
         isDirectory: () => false,
@@ -619,64 +656,27 @@ export class AcpLsOperations {
 
   async ls(options?: { path?: string; limit?: number }): Promise<string[]> {
     const listPath = options?.path || ".";
-    const cmd = `ls -A1 ${escapeBash(listPath)} 2>/dev/null || ls ${escapeBash(listPath)} 2>/dev/null || echo ""`;
-
-    let lastOutputLength = 0;
+    // Use ls -A1 which doesn't show . and .. but also doesn't show total line
+    const cmd = `ls -A1 ${escapeBash(listPath)} 2>/dev/null || echo ""`;
 
     try {
       const terminal = await this.client.createTerminal({
         command: cmd,
         cwd: listPath,
-        terminalId: undefined,
-        size: { cols: 80, rows: 24 },
+        sessionId: this.client.sessionId,
       });
 
-      const results: string[] = [];
-      let resolved = false;
+      try {
+        const result = await pollTerminalToCompletion(terminal);
+        const lines = result.output
+          .split("\n")
+          .filter((line) => line.trim() !== "")
+          .slice(0, options?.limit || 100);
 
-      // Poll for output
-      const pollInterval = setInterval(async () => {
-        if (resolved) {
-          clearInterval(pollInterval);
-          return;
-        }
-
-        try {
-          const output = await terminal.currentOutput();
-
-          // Get new output since last check
-          if (output.output.length > lastOutputLength) {
-            const newOutput = output.output.slice(lastOutputLength);
-            results.push(newOutput);
-            lastOutputLength = output.output.length;
-          }
-
-          // Check if process has exited
-          if (output.exitStatus !== undefined) {
-            resolved = true;
-            clearInterval(pollInterval);
-          }
-        } catch {
-          resolved = true;
-          clearInterval(pollInterval);
-        }
-      }, TERMINAL_POLL_INTERVAL);
-
-      await terminal.waitForExit();
-      resolved = true;
-
-      if (pollInterval) clearInterval(pollInterval);
-
-      terminal.release().catch(() => {});
-
-      const output = results.join("");
-      const lines = output
-        .split("\n")
-        .filter((line) => line.trim() !== "")
-        .slice(0, options?.limit || 100);
-
-      // Skip the total line at the top
-      return lines.filter((line) => !line.startsWith("total "));
+        return lines;
+      } finally {
+        terminal.release().catch(() => {});
+      }
     } catch {
       return [];
     }

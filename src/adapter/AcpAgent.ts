@@ -214,6 +214,7 @@ export class AcpAgent implements Agent {
       additionalDirectories: params.additionalDirectories || [],
       modelRegistry: this.config.modelRegistry,
       acpConnection: this.connection,
+      sessionId, // Pass sessionId for terminal requests
     };
 
     try {

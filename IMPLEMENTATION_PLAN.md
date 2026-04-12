@@ -617,9 +617,17 @@ main().catch(console.error);
 - [x] Implement `initialize()`, `newSession()`, `prompt()`, `cancel()`, and `setSessionConfigOption()`
 - [x] Implement AcpAgentRuntime (`src/runtime/AcpAgentRuntime.ts`)
 
-### Phase 5: Runtime Factory (Day 3-4)
+### Phase 5: Runtime Factory (Day 3-4) ✅
 
-- [ ] Implement AcpAgentRuntime with tool delegation (`src/runtime/AcpAgentRuntime.ts`)
+- [x] Implement AcpAgentRuntime with tool delegation (`src/runtime/AcpAgentRuntime.ts`)
+- [x] AcpConnectionAdapter to adapt ACP connection to AcpClientInterface
+- [x] Read Operations (via ACP fs.readTextFile)
+- [x] Write Operations (via ACP fs.writeTextFile)
+- [x] Edit Operations (read + write)
+- [x] Bash Operations (via ACP terminal)
+- [x] Grep Operations (via ACP terminal + isDirectory/readFile for context)
+- [x] Find Operations (via ACP terminal)
+- [x] Ls Operations (via ACP terminal)
 
 ### Phase 6: CLI Entry Point (Day 4)
 
