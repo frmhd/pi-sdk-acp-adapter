@@ -586,10 +586,16 @@ main().catch(console.error);
 - [x] Define adapter types (`src/adapter/types.ts`)
 - [x] Implement AcpEventMapper (`src/adapter/AcpEventMapper.ts`)
 
-### Phase 2: Tool Bridge Implementation (Day 1-2)
+### Phase 2: Tool Bridge Implementation (Day 1-2) ✅
 
-- [ ] Implement AcpToolBridge (`src/adapter/AcpToolBridge.ts`)
-- [ ] Implement Terminal Management delegation
+- [x] Implement AcpToolBridge (`src/adapter/AcpToolBridge.ts`)
+- [x] Implement Terminal Management delegation
+- [x] Implement Read Operations (via ACP fs.readTextFile)
+- [x] Implement Write Operations (via ACP fs.writeTextFile)
+- [x] Implement Edit Operations (read + write)
+- [x] Implement Grep Operations (via terminal)
+- [x] Implement Find Operations (via terminal)
+- [x] Implement Ls Operations (via terminal)
 
 ### Phase 3: Session Configuration (Day 2)
 
