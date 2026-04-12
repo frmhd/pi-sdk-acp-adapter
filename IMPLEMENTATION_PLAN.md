@@ -597,11 +597,19 @@ main().catch(console.error);
 - [x] Implement Find Operations (via terminal)
 - [x] Implement Ls Operations (via terminal)
 
-### Phase 3: Session Configuration (Day 2)
+### Phase 3: Session Configuration (Day 2) ✅
 
-- [ ] Implement SessionConfigOptions
-- [ ] Implement setSessionConfigOption Handler
-- [ ] Implement Model Registry Integration
+- [x] Implement SessionConfigOptions (`src/adapter/AcpSessionConfig.ts`)
+- [x] Implement setSessionConfigOption Handler
+- [x] Implement Model Registry Integration
+- [x] Bug fixes applied:
+  - All thinking levels supported (including `xhigh`)
+  - `getAvailableModels` is synchronous (matches Pi SDK)
+  - Proper union type handling via `"type" in params` check
+  - Valid `currentValue` always set (falls back to first model)
+  - Model lookup uses provider disambiguation
+  - `SetConfigResult` provides explicit success/failure feedback
+  - `handleSetSessionConfigOption` returns result; `buildSetSessionConfigOptionResponse` builds response
 
 ### Phase 4: ACP Agent Implementation (Day 2-3)
 

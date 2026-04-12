@@ -39,6 +39,19 @@ export type { ThinkingLevel, AgentEvent } from "./adapter/types.js";
 
 export type { Model, Provider, AssistantMessageEvent } from "./adapter/types.js";
 
+// Re-export session config functions
+export {
+  ALL_THINKING_LEVELS,
+  getAvailableModels,
+  createModelConfigOption,
+  createThinkingConfigOption,
+  getCurrentConfigOptions,
+  findModelById,
+  handleSetSessionConfigOption,
+  buildSetSessionConfigOptionResponse,
+  type SetConfigResult,
+} from "./adapter/AcpSessionConfig.js";
+
 // Re-export mapper functions
 export {
   mapAgentEvent,
