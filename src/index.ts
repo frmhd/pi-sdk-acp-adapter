@@ -65,3 +65,13 @@ export {
   mapStopReason,
   createToolCallContent,
 } from "./adapter/AcpEventMapper.js";
+
+// Re-export AcpAgent
+export { AcpAgent, type AcpAdapterConfig } from "./adapter/AcpAgent.js";
+
+// Re-export runtime functions
+export {
+  createAcpAgentRuntime,
+  createAcpAgentRuntimeFactory,
+  type CreateAcpAgentRuntimeOptions,
+} from "./runtime/index.js";

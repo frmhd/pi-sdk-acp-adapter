@@ -48,8 +48,6 @@ export interface AcpSessionState {
   currentModelId?: string;
   /** Current thinking level in use */
   currentThinkingLevel?: ThinkingLevel;
-  /** Session unsubscribe function for event cleanup */
-  unsubscribe?: () => void;
 }
 
 // =============================================================================
@@ -105,6 +103,7 @@ export function mapToolKind(toolName: string): ToolKind {
       return "execute";
     case "grep":
     case "find":
+    case "ls":
       return "search";
     case "write":
     default:

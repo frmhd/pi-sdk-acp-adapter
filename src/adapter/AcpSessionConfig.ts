@@ -249,11 +249,11 @@ export interface SetConfigResult {
  *
  * @returns The set config result indicating success/failure
  */
-export function handleSetSessionConfigOption(
+export async function handleSetSessionConfigOption(
   params: SetSessionConfigOptionRequest,
   session: AcpSessionState,
   availableModels: Model<Api>[],
-): SetConfigResult {
+): Promise<SetConfigResult> {
   // ACP SetSessionConfigOptionRequest is an intersection type combining:
   //   ({ type: "boolean"; value: boolean } | { value: SessionConfigValueId })
   //   & { configId, sessionId, _meta }
@@ -283,11 +283,17 @@ export function handleSetSessionConfigOption(
         return { applied: false, error: `Session not initialized` };
       }
 
-      session.session.setModel(model).catch((err) => {
+      try {
+        await session.session.setModel(model);
+        session.currentModelId = value;
+        return { applied: true };
+      } catch (err) {
         console.error(`Failed to set model ${value}:`, err);
-      });
-      session.currentModelId = value;
-      return { applied: true };
+        return {
+          applied: false,
+          error: `Failed to set model: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
     }
 
     case "thinking_level": {

@@ -611,10 +611,11 @@ main().catch(console.error);
   - `SetConfigResult` provides explicit success/failure feedback
   - `handleSetSessionConfigOption` returns result; `buildSetSessionConfigOptionResponse` builds response
 
-### Phase 4: ACP Agent Implementation (Day 2-3)
+### Phase 4: ACP Agent Implementation (Day 2-3) ✅
 
-- [ ] Implement AcpAgent Class (`src/adapter/AcpAgent.ts`)
-- [ ] Implement `initialize()`, `newSession()`, `prompt()`, `cancel()`, and `setSessionConfigOption()`
+- [x] Implement AcpAgent Class (`src/adapter/AcpAgent.ts`)
+- [x] Implement `initialize()`, `newSession()`, `prompt()`, `cancel()`, and `setSessionConfigOption()`
+- [x] Implement AcpAgentRuntime (`src/runtime/AcpAgentRuntime.ts`)
 
 ### Phase 5: Runtime Factory (Day 3-4)
 
