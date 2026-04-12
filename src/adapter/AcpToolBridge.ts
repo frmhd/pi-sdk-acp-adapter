@@ -71,9 +71,9 @@ export interface AcpClientInterface {
     sessionId: string;
   }): Promise<TerminalHandle>;
   /** Read a text file */
-  readTextFile(params: { path: string }): Promise<{ content: string }>;
+  readTextFile(params: { path: string; sessionId: string }): Promise<{ content: string }>;
   /** Write a text file */
-  writeTextFile(params: { path: string; content: string }): Promise<void>;
+  writeTextFile(params: { path: string; content: string; sessionId: string }): Promise<void>;
 }
 
 // =============================================================================
@@ -324,7 +324,10 @@ export class AcpReadOperations implements ReadOperations {
   }
 
   async readFile(absolutePath: string): Promise<Buffer> {
-    const result = await this.client.readTextFile({ path: absolutePath });
+    const result = await this.client.readTextFile({
+      path: absolutePath,
+      sessionId: this.client.sessionId,
+    });
     return Buffer.from(result.content, "utf-8");
   }
 
@@ -350,7 +353,11 @@ export class AcpWriteOperations implements WriteOperations {
   }
 
   async writeFile(absolutePath: string, content: string): Promise<void> {
-    await this.client.writeTextFile({ path: absolutePath, content });
+    await this.client.writeTextFile({
+      path: absolutePath,
+      content,
+      sessionId: this.client.sessionId,
+    });
   }
 
   async mkdir(dir: string): Promise<void> {

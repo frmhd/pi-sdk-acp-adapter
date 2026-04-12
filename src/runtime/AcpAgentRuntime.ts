@@ -21,24 +21,15 @@ import {
   createWriteTool,
   createEditTool,
   createBashTool,
-  createGrepTool,
-  createFindTool,
-  createLsTool,
   type ReadOperations,
   type WriteOperations,
   type EditOperations,
   type BashOperations,
-  type GrepOperations,
-  type FindOperations,
-  type LsOperations,
 } from "@mariozechner/pi-coding-agent";
 
 import {
   AcpReadOperations,
   AcpWriteOperations,
-  AcpGrepOperations,
-  AcpFindOperations,
-  AcpLsOperations,
   AcpTerminalOperations,
   type AcpClientInterface,
 } from "../adapter/AcpToolBridge.js";
@@ -80,11 +71,17 @@ class AcpConnectionAdapter implements AcpClientInterface {
   }
 
   async readTextFile(params: { path: string }): Promise<{ content: string }> {
-    return this.connection.readTextFile(params);
+    return this.connection.readTextFile({
+      ...params,
+      sessionId: this.sessionId,
+    });
   }
 
   async writeTextFile(params: { path: string; content: string }): Promise<void> {
-    return this.connection.writeTextFile(params);
+    return this.connection.writeTextFile({
+      ...params,
+      sessionId: this.sessionId,
+    });
   }
 }
 
@@ -110,6 +107,8 @@ export interface CreateAcpAgentRuntimeOptions {
   sessionId?: string;
   /** Default thinking level */
   thinkingLevel?: ThinkingLevel;
+  /** Callback for capturing edits for diff support */
+  onEditCaptured?: (path: string, oldText: string, newText: string) => void;
 }
 
 // =============================================================================
@@ -144,15 +143,27 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
   // Create ACP operation bridges
   const readOps: ReadOperations = new AcpReadOperations(acpClient);
   const writeOps: WriteOperations = new AcpWriteOperations(acpClient);
+
+  // For diff support (Gemini CLI feature parity)
+  const editContents = new Map<string, string>();
+
   const editOps: EditOperations = {
-    readFile: async (path: string) => readOps.readFile(path),
-    writeFile: async (path: string, content: string) => writeOps.writeFile(path, content),
+    readFile: async (path: string) => {
+      const buffer = await readOps.readFile(path);
+      editContents.set(path, buffer.toString("utf-8"));
+      return buffer;
+    },
+    writeFile: async (path: string, content: string) => {
+      const oldText = editContents.get(path);
+      if (oldText !== undefined && options.onEditCaptured) {
+        options.onEditCaptured(path, oldText, content);
+      }
+      editContents.delete(path);
+      return writeOps.writeFile(path, content);
+    },
     access: async (path: string) => readOps.access(path),
   };
   const bashOps: BashOperations = new AcpTerminalOperations(acpClient);
-  const grepOps: GrepOperations = new AcpGrepOperations(acpClient);
-  const findOps: FindOperations = new AcpFindOperations(acpClient);
-  const lsOps: LsOperations = new AcpLsOperations(acpClient);
 
   // Create tools with ACP delegation
   const tools = [
@@ -160,9 +171,6 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
     createWriteTool(options.cwd, { operations: writeOps }),
     createEditTool(options.cwd, { operations: editOps }),
     createBashTool(options.cwd, { operations: bashOps }),
-    createGrepTool(options.cwd, { operations: grepOps }),
-    createFindTool(options.cwd, { operations: findOps }),
-    createLsTool(options.cwd, { operations: lsOps }),
   ];
 
   // Create session with custom tools
@@ -171,7 +179,8 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
     agentDir: options.agentDir,
     modelRegistry: options.modelRegistry,
     thinkingLevel: options.thinkingLevel || "medium",
-    tools, // Override default tools with ACP-delegated ones
+    tools: [],
+    customTools: tools, // Use customTools to override built-in tools
   };
 
   // Create the session

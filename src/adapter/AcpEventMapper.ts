@@ -9,6 +9,7 @@ import type {
   ToolCall,
   ToolCallUpdate,
   ToolCallContent,
+  ToolCallLocation,
   ContentChunk,
   StopReason,
   ToolCallStatus,
@@ -20,7 +21,7 @@ import type { AgentEvent } from "@mariozechner/pi-agent-core";
 
 import type { AssistantMessageEvent } from "@mariozechner/pi-ai";
 
-import { mapToolKind, mapStopReason, createToolCallContent } from "./types.js";
+import { mapToolKind, mapStopReason, createToolCallContent, createDiffContent } from "./types.js";
 
 // =============================================================================
 // Message Chunk Mapping
@@ -61,18 +62,71 @@ export function mapMessageUpdate(
 }
 
 /**
- * Convert tool execution start to an ACP ToolCall notification
+ * Convert tool execution start to an ACP ToolCall notification.
+ *
+ * Provides descriptive titles and file locations for transparency in the UI.
+ * (Gemini CLI feature parity)
  */
 export function mapToolExecutionStart(
   sessionId: string,
   event: { toolCallId: string; toolName: string; args: unknown },
 ): SessionNotification {
+  const args = (event.args as Record<string, unknown>) || {};
+  let title = event.toolName;
+  const locations: ToolCallLocation[] = [];
+
+  // Generate descriptive titles and locations based on tool and args
+  switch (event.toolName) {
+    case "bash":
+      if (typeof args.command === "string") {
+        title = `Running: ${args.command}`;
+      }
+      break;
+    case "read":
+    case "readFile":
+      if (typeof args.path === "string") {
+        title = `Reading: ${args.path}`;
+        locations.push({ path: args.path });
+      }
+      break;
+    case "write":
+    case "writeFile":
+      if (typeof args.path === "string") {
+        title = `Writing: ${args.path}`;
+        locations.push({ path: args.path });
+      }
+      break;
+    case "edit":
+    case "applyEdits":
+      if (typeof args.path === "string") {
+        title = `Editing: ${args.path}`;
+        locations.push({ path: args.path });
+      }
+      break;
+    case "ls":
+    case "list":
+      if (typeof args.path === "string") {
+        title = `Listing: ${args.path}`;
+        locations.push({ path: args.path });
+      } else {
+        title = "Listing directory";
+      }
+      break;
+    case "grep":
+    case "search":
+      if (typeof args.pattern === "string") {
+        title = `Searching for: ${args.pattern}`;
+      }
+      break;
+  }
+
   const toolCall: ToolCall = {
     toolCallId: event.toolCallId,
     rawInput: event.args,
     kind: mapToolKind(event.toolName),
     status: "pending",
-    title: event.toolName,
+    title,
+    locations: locations.length > 0 ? locations : undefined,
   };
 
   return {
@@ -199,6 +253,7 @@ function extractTextFromResult(result: unknown): string | undefined {
 export function mapToolExecutionEnd(
   sessionId: string,
   event: { toolCallId: string; result: unknown; isError: boolean },
+  lastEditDiff?: { path: string; oldText: string; newText: string },
 ): SessionNotification {
   const text = extractTextFromResult(event.result);
   let toolStatus: ToolCallStatus = "completed";
@@ -209,7 +264,10 @@ export function mapToolExecutionEnd(
 
   const content: ToolCallContent[] = [];
 
-  if (text) {
+  // Use diff content if available (Gemini CLI feature parity)
+  if (lastEditDiff) {
+    content.push(createDiffContent(lastEditDiff.path, lastEditDiff.newText, lastEditDiff.oldText));
+  } else if (text) {
     content.push(createToolCallContent(text));
   } else if (event.isError) {
     // Create error message if no text content
@@ -246,6 +304,7 @@ export function mapToolExecutionEnd(
 export function mapAgentEvent(
   sessionId: string,
   event: AgentSessionEvent,
+  lastEditDiff?: { path: string; oldText: string; newText: string },
 ): SessionNotification | undefined {
   // Handle AgentEvent types (from pi-agent-core)
   if ("type" in event) {
@@ -286,7 +345,7 @@ export function mapAgentEvent(
           result: unknown;
           isError: boolean;
         };
-        return mapToolExecutionEnd(sessionId, toolEvent);
+        return mapToolExecutionEnd(sessionId, toolEvent, lastEditDiff);
       }
 
       // These are informational, handled by prompt response stopReason
@@ -330,4 +389,10 @@ export function isFinalEvent(event: AgentSessionEvent): boolean {
 // Re-exports
 // =============================================================================
 
-export { mapToolKind, mapStopReason, createToolCallContent } from "./types.js";
+export {
+  mapToolKind,
+  mapStopReason,
+  createToolCallContent,
+  createDiffContent,
+  createTerminalContent,
+} from "./types.js";

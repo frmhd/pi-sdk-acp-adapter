@@ -18,6 +18,8 @@ import type {
   InitializeResponse,
   NewSessionRequest,
   NewSessionResponse,
+  LoadSessionRequest,
+  LoadSessionResponse,
   PromptRequest,
   PromptResponse,
   CancelNotification,
@@ -82,6 +84,51 @@ function extractTextFromContent(blocks: ContentBlock[]): string {
   }
 
   return parts.join("\n\n");
+}
+
+/**
+ * Resolve @path patterns in text by reading file contents via ACP.
+ *
+ * Looks for @path (optionally quoted or in backticks) and replaces it with:
+ * --- @path ---
+ * <content>
+ */
+async function resolvePathsInText(
+  text: string,
+  cwd: string,
+  connection: AgentSideConnection,
+  sessionId: string,
+): Promise<string> {
+  const pathRegex = /(?:^|\s)@(?:["']([^"']+)["']|`([^`]+)`|([^\s]+))/g;
+  let resolvedText = text;
+  const matches = Array.from(text.matchAll(pathRegex));
+
+  // Process matches in reverse order to keep indices valid
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const match = matches[i];
+    const path = match[1] || match[2] || match[3];
+
+    try {
+      // Resolve path relative to cwd if it's not absolute
+      const fullPath = path.startsWith("/") ? path : `${cwd}/${path}`;
+
+      const { content } = await connection.readTextFile({
+        path: fullPath,
+        sessionId,
+      });
+
+      const replacement = `\n\n--- @${path} ---\n${content}\n`;
+      resolvedText =
+        resolvedText.slice(0, match.index) +
+        match[0].replace(`@${path}`, replacement) +
+        resolvedText.slice(match.index + match[0].length);
+    } catch (error) {
+      console.warn(`Failed to resolve path @${path}:`, error);
+      // Keep @path as-is if resolution fails
+    }
+  }
+
+  return resolvedText;
 }
 
 // =============================================================================
@@ -161,8 +208,8 @@ export class AcpAgent implements Agent {
         version: "0.1.0",
       },
       agentCapabilities: {
-        // LoadSession is not supported in V1
-        loadSession: false,
+        // LoadSession enabled (Gemini CLI feature parity)
+        loadSession: true,
 
         // Prompt capabilities - text only for now (Bug 3 fix: images not implemented)
         promptCapabilities: {
@@ -215,6 +262,10 @@ export class AcpAgent implements Agent {
       modelRegistry: this.config.modelRegistry,
       acpConnection: this.connection,
       sessionId, // Pass sessionId for terminal requests
+      // Gemini CLI feature parity: capture edits for diff support
+      onEditCaptured: (path, oldText, newText) => {
+        sessionState.lastEditDiff = { path, oldText, newText };
+      },
     };
 
     try {
@@ -254,6 +305,27 @@ export class AcpAgent implements Agent {
   }
 
   /**
+   * Load an existing agent session.
+   *
+   * @param params - Load session request with session ID
+   * @returns Session ID and current configuration options
+   */
+  async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
+    const sessionState = this.sessions.get(params.sessionId);
+
+    if (!sessionState || !sessionState.session) {
+      throw new Error(`Session ${params.sessionId} not found`);
+    }
+
+    const availableModels = getAvailableModels(this.config.modelRegistry);
+    const configOptions = getCurrentConfigOptions(sessionState, availableModels);
+
+    return {
+      configOptions,
+    };
+  }
+
+  /**
    * Send a user prompt to the agent.
    *
    * Forwards the prompt to Pi AgentSession and streams events back
@@ -272,24 +344,37 @@ export class AcpAgent implements Agent {
     const session = sessionState.session;
 
     // Extract text from content blocks (includes resource_link text)
-    const userText = extractTextFromContent(params.prompt);
+    const rawUserText = extractTextFromContent(params.prompt);
 
-    if (!userText.trim()) {
+    if (!rawUserText.trim()) {
       return {
         stopReason: "end_turn",
       };
     }
 
+    // Resolve @path patterns (Gemini CLI feature parity)
+    const userText = await resolvePathsInText(
+      rawUserText,
+      sessionState.cwd,
+      this.connection,
+      params.sessionId,
+    );
+
     // Subscribe to Pi events and forward to ACP connection
     const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
       // Map Pi event to ACP notification and send
-      const notification = mapAgentEvent(params.sessionId, event);
+      const notification = mapAgentEvent(params.sessionId, event, sessionState.lastEditDiff);
 
       if (notification) {
         // Bug 7 fix: handle errors from sessionUpdate
         this.connection.sessionUpdate(notification).catch((err) => {
           console.error(`Failed to send session update for ${params.sessionId}:`, err);
         });
+      }
+
+      // Clear captured diff after it's been used in tool_execution_end
+      if ((event as { type?: string }).type === "tool_execution_end") {
+        sessionState.lastEditDiff = undefined;
       }
     });
 

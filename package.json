@@ -13,7 +13,7 @@
     "url": "git+https://github.com/frmhd/pi-sdk-acp-adapter.git"
   },
   "bin": {
-    "pi-acp": "./dist/cli/main.mjs"
+    "pi-acp": "./dist/cli.mjs"
   },
   "files": [
     "dist"
@@ -21,15 +21,15 @@
   "type": "module",
   "exports": {
     ".": "./dist/index.mjs",
-    "./cli/main": "./dist/cli/main.mjs",
+    "./cli": "./dist/cli.mjs",
     "./package.json": "./package.json"
   },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "vp pack src/index.ts src/cli/main.ts --dts",
-    "dev": "vp pack src/index.ts src/cli/main.ts --dts --watch",
+    "build": "vp pack src/index.ts src/cli.ts --dts",
+    "dev": "vp pack src/index.ts src/cli.ts --dts --watch",
     "test": "vp test",
     "check": "vp check",
     "prepublishOnly": "vp run build",

@@ -48,6 +48,12 @@ export interface AcpSessionState {
   currentModelId?: string;
   /** Current thinking level in use */
   currentThinkingLevel?: ThinkingLevel;
+  /** Last captured edit diff for use in tool_execution_end */
+  lastEditDiff?: {
+    path: string;
+    oldText: string;
+    newText: string;
+  };
 }
 
 // =============================================================================
@@ -154,6 +160,31 @@ export function createToolCallContent(text: string): ToolCallContent {
   return {
     type: "content",
     content: { type: "text", text },
+  } as ToolCallContent;
+}
+
+/** Create tool call content with diff */
+export function createDiffContent(
+  path: string,
+  newText: string,
+  oldText?: string,
+): ToolCallContent {
+  return {
+    type: "diff",
+    path,
+    newText,
+    oldText: oldText ?? null,
+    _meta: {
+      kind: !oldText ? "add" : "edit",
+    },
+  } as ToolCallContent;
+}
+
+/** Create tool call content with terminal */
+export function createTerminalContent(terminalId: string): ToolCallContent {
+  return {
+    type: "terminal",
+    terminalId,
   } as ToolCallContent;
 }
 

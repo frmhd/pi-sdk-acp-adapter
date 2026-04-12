@@ -20,10 +20,10 @@ import { Writable, Readable } from "node:stream";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { AcpAgent } from "../adapter/AcpAgent.js";
-import { createAcpAgentRuntime } from "../runtime/AcpAgentRuntime.js";
+import { AcpAgent } from "./adapter/AcpAgent.js";
+import { createAcpAgentRuntime } from "./runtime/AcpAgentRuntime.js";
 import { ModelRegistry, AuthStorage, getAgentDir } from "@mariozechner/pi-coding-agent";
-import type { CreateAcpAgentRuntimeOptions } from "../runtime/AcpAgentRuntime.js";
+import type { CreateAcpAgentRuntimeOptions } from "./runtime/AcpAgentRuntime.js";
 
 // =============================================================================
 // Error Handling

@@ -97,7 +97,8 @@ describe("Tool Execution Start Mapping", () => {
     expect(notification.sessionId).toBe("session-123");
     expect(notification.update.sessionUpdate).toBe("tool_call");
     expect((notification.update as any).toolCallId).toBe("tool-1");
-    expect((notification.update as any).title).toBe("read");
+    expect((notification.update as any).title).toBe("Reading: /test/file.ts");
+    expect((notification.update as any).locations).toEqual([{ path: "/test/file.ts" }]);
     expect((notification.update as any).kind).toBe("read");
     expect((notification.update as any).status).toBe("pending");
   });
@@ -109,6 +110,7 @@ describe("Tool Execution Start Mapping", () => {
       args: { command: "ls -la" },
     });
 
+    expect((notification.update as any).title).toBe("Running: ls -la");
     expect((notification.update as any).kind).toBe("execute");
   });
 });
