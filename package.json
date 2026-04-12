@@ -1,16 +1,19 @@
 {
   "name": "pi-sdk-acp-adapter",
-  "version": "0.0.0",
-  "description": "A starter for creating a TypeScript package.",
-  "homepage": "https://github.com/author/library#readme",
+  "version": "0.1.0",
+  "description": "ACP adapter for Pi Coding Agent SDK - bridges Pi to ACP-compatible clients like Zed",
+  "homepage": "https://github.com/frmhd/pi-sdk-acp-adapter",
   "bugs": {
-    "url": "https://github.com/author/library/issues"
+    "url": "https://github.com/frmhd/pi-sdk-acp-adapter/issues"
   },
   "license": "MIT",
-  "author": "Author Name <author.name@mail.com>",
+  "author": "Pi Team",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/author/library.git"
+    "url": "git+https://github.com/frmhd/pi-sdk-acp-adapter.git"
+  },
+  "bin": {
+    "pi-acp": "./dist/cli.js"
   },
   "files": [
     "dist"
@@ -30,6 +33,12 @@
     "check": "vp check",
     "prepublishOnly": "vp run build",
     "prepare": "vp config"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^0.18.2",
+    "@mariozechner/pi-agent-core": "^0.66.1",
+    "@mariozechner/pi-ai": "^0.66.1",
+    "@mariozechner/pi-coding-agent": "^0.66.1"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

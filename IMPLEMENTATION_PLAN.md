@@ -581,10 +581,10 @@ main().catch(console.error);
 
 ## Implementation Order
 
-### Phase 1: Core Adapter Infrastructure (Day 1)
+### Phase 1: Core Adapter Infrastructure (Day 1) ✅
 
-- [ ] Define adapter types (`src/adapter/types.ts`)
-- [ ] Implement AcpEventMapper (`src/adapter/AcpEventMapper.ts`)
+- [x] Define adapter types (`src/adapter/types.ts`)
+- [x] Implement AcpEventMapper (`src/adapter/AcpEventMapper.ts`)
 
 ### Phase 2: Tool Bridge Implementation (Day 1-2)
 
@@ -613,7 +613,7 @@ main().catch(console.error);
 
 ### Phase 7: Testing Plan (Day 4-5)
 
-- [ ] Unit tests for core components
+- [x] Unit tests for core components (see `tests/index.test.ts`)
 - [ ] Integration tests (`AcpAgent.test.ts`, `EndToEnd.test.ts`)
 - [ ] Manual testing with Zed
 
