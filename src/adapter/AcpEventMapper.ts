@@ -33,14 +33,8 @@ import {
   createToolCallContent,
   createDiffContent,
   createTerminalContent,
+  TOOL_NAME_META_KEY,
 } from "./types.js";
-
-// =============================================================================
-// Meta Constants
-// =============================================================================
-
-/** Key for storing tool name in _meta (Zed compatibility) */
-const TOOL_NAME_META_KEY = "tool_name";
 
 /** Extra context available while mapping Pi tool events to ACP. */
 export interface ToolEventMappingContext {
@@ -157,33 +151,148 @@ function buildToolLocations(
 // Tool Result Content Mapping
 // =============================================================================
 
-function mapPiContentBlockToAcp(block: unknown): ToolCallContent | undefined {
-  if (typeof block !== "object" || block === null) {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function getOptionalObjectField(
+  record: Record<string, unknown>,
+  field: string,
+): Record<string, unknown> | null | undefined {
+  const value = record[field];
+  return value === null ? null : isRecord(value) ? value : undefined;
+}
+
+function getOptionalStringField(
+  record: Record<string, unknown>,
+  field: string,
+): string | undefined {
+  return typeof record[field] === "string" ? (record[field] as string) : undefined;
+}
+
+function getOptionalNumberField(
+  record: Record<string, unknown>,
+  field: string,
+): number | undefined {
+  return typeof record[field] === "number" ? (record[field] as number) : undefined;
+}
+
+function mapPiContentBlock(block: unknown): ContentBlock | undefined {
+  if (!isRecord(block)) {
     return undefined;
   }
 
-  const content = block as Record<string, unknown>;
-
-  if (content.type === "text" && typeof content.text === "string") {
-    return createStructuredToolCallContent({
+  if (block.type === "text" && typeof block.text === "string") {
+    return {
       type: "text",
-      text: content.text,
-    } satisfies ContentBlock);
+      text: block.text,
+      ...(getOptionalObjectField(block, "_meta") !== undefined
+        ? { _meta: getOptionalObjectField(block, "_meta") }
+        : {}),
+    } satisfies ContentBlock;
+  }
+
+  const mimeType =
+    getOptionalStringField(block, "mimeType") ?? getOptionalStringField(block, "mime_type");
+
+  if (block.type === "image" && typeof block.data === "string" && mimeType) {
+    return {
+      type: "image",
+      data: block.data,
+      mimeType,
+      ...(getOptionalStringField(block, "uri")
+        ? { uri: getOptionalStringField(block, "uri") }
+        : {}),
+      ...(getOptionalObjectField(block, "_meta") !== undefined
+        ? { _meta: getOptionalObjectField(block, "_meta") }
+        : {}),
+    } satisfies ContentBlock;
+  }
+
+  if (block.type === "audio" && typeof block.data === "string" && mimeType) {
+    return {
+      type: "audio",
+      data: block.data,
+      mimeType,
+      ...(getOptionalObjectField(block, "_meta") !== undefined
+        ? { _meta: getOptionalObjectField(block, "_meta") }
+        : {}),
+    } satisfies ContentBlock;
   }
 
   if (
-    content.type === "image" &&
-    typeof content.data === "string" &&
-    typeof content.mimeType === "string"
+    block.type === "resource_link" &&
+    typeof block.name === "string" &&
+    typeof block.uri === "string"
   ) {
-    return createStructuredToolCallContent({
-      type: "image",
-      data: content.data,
-      mimeType: content.mimeType,
-    } satisfies ContentBlock);
+    return {
+      type: "resource_link",
+      name: block.name,
+      uri: block.uri,
+      ...(getOptionalStringField(block, "title")
+        ? { title: getOptionalStringField(block, "title") }
+        : {}),
+      ...(getOptionalStringField(block, "description")
+        ? { description: getOptionalStringField(block, "description") }
+        : {}),
+      ...(mimeType ? { mimeType } : {}),
+      ...(getOptionalNumberField(block, "size") !== undefined
+        ? { size: getOptionalNumberField(block, "size") }
+        : {}),
+      ...(getOptionalObjectField(block, "_meta") !== undefined
+        ? { _meta: getOptionalObjectField(block, "_meta") }
+        : {}),
+    } satisfies ContentBlock;
+  }
+
+  if (block.type === "resource") {
+    const resource = getOptionalObjectField(block, "resource");
+    if (!resource || typeof resource.uri !== "string") {
+      return undefined;
+    }
+
+    const resourceMimeType =
+      getOptionalStringField(resource, "mimeType") ?? getOptionalStringField(resource, "mime_type");
+    const embeddedResource =
+      typeof resource.text === "string"
+        ? {
+            text: resource.text,
+            uri: resource.uri,
+            ...(resourceMimeType ? { mimeType: resourceMimeType } : {}),
+            ...(getOptionalObjectField(resource, "_meta") !== undefined
+              ? { _meta: getOptionalObjectField(resource, "_meta") }
+              : {}),
+          }
+        : typeof resource.blob === "string"
+          ? {
+              blob: resource.blob,
+              uri: resource.uri,
+              ...(resourceMimeType ? { mimeType: resourceMimeType } : {}),
+              ...(getOptionalObjectField(resource, "_meta") !== undefined
+                ? { _meta: getOptionalObjectField(resource, "_meta") }
+                : {}),
+            }
+          : undefined;
+
+    if (!embeddedResource) {
+      return undefined;
+    }
+
+    return {
+      type: "resource",
+      resource: embeddedResource,
+      ...(getOptionalObjectField(block, "_meta") !== undefined
+        ? { _meta: getOptionalObjectField(block, "_meta") }
+        : {}),
+    } satisfies ContentBlock;
   }
 
   return undefined;
+}
+
+function mapPiContentBlockToAcp(block: unknown): ToolCallContent | undefined {
+  const content = mapPiContentBlock(block);
+  return content ? createStructuredToolCallContent(content) : undefined;
 }
 
 function mapStructuredToolResultContent(result: unknown): ToolCallContent[] | undefined {

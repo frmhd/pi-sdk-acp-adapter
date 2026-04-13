@@ -372,7 +372,12 @@ export class AcpAgent implements Agent {
     });
 
     await this.refreshSessionMetadata(sessionState, true);
-    await replaySessionHistory(this.connection, sessionState.sessionId, sessionState.session!);
+    await replaySessionHistory(
+      this.connection,
+      sessionState.sessionId,
+      sessionState.session!,
+      sessionState.cwd,
+    );
 
     return {
       configOptions: this.getConfigOptions(sessionState),

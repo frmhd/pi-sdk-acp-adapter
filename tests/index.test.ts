@@ -478,6 +478,58 @@ describe("Tool Execution End Mapping", () => {
     expect((notification.update as any).rawOutput).toEqual(result);
   });
 
+  test("preserves resource links and embedded resources returned by tool results", () => {
+    const result = {
+      content: [
+        {
+          type: "resource_link",
+          name: "Screenshot",
+          uri: "file:///tmp/screenshot.png",
+          mimeType: "image/png",
+        },
+        {
+          type: "resource",
+          resource: {
+            uri: "file:///tmp/notes.txt",
+            text: "hello from a resource",
+            mimeType: "text/plain",
+          },
+        },
+      ],
+    };
+
+    const notification = mapToolExecutionEnd("session-123", {
+      toolCallId: "tool-3b",
+      toolName: "read",
+      result,
+      isError: false,
+    });
+
+    expect((notification.update as any).content).toEqual([
+      {
+        type: "content",
+        content: {
+          type: "resource_link",
+          name: "Screenshot",
+          uri: "file:///tmp/screenshot.png",
+          mimeType: "image/png",
+        },
+      },
+      {
+        type: "content",
+        content: {
+          type: "resource",
+          resource: {
+            uri: "file:///tmp/notes.txt",
+            text: "hello from a resource",
+            mimeType: "text/plain",
+          },
+        },
+      },
+    ]);
+    expect((notification.update as any).rawOutput).toEqual(result);
+  });
+
   test("keeps bash completion terminal-backed and preserves raw terminal metadata", () => {
     const rawOutput = {
       type: "acp_terminal",

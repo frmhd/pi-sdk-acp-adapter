@@ -62,13 +62,13 @@ Legend:
 
 ## Phase 4 — Polish and Compatibility
 
-- [ ] Improve mapping for image/resource content returned by Pi tools
-- [ ] Add richer compatibility coverage for Zed-facing ACP payloads
-- [ ] Add README documentation for Zed integration behavior and current feature support
-- [ ] Document intentional non-goals: no permissions, no subagents, no fake modes, no fake MCP
-- [ ] Review `_meta.tool_name`, locations, and raw payload consistency across all tool types
+- [x] Improve mapping for image/resource content returned by Pi tools
+- [x] Add richer compatibility coverage for Zed-facing ACP payloads
+- [x] Add README documentation for Zed integration behavior and current feature support
+- [x] Document intentional non-goals: no permissions, no subagents, no fake modes, no fake MCP
+- [x] Review `_meta.tool_name`, locations, and raw payload consistency across all tool types
 - [ ] Perform end-to-end manual validation in Zed
-- [ ] Verify Phase 4 with `vp check` and `vp test`
+- [x] Verify Phase 4 with `vp check` and `vp test`
 
 ## Done
 

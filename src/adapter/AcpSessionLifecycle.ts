@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve as resolvePath } from "node:path";
 
 import type {
   AgentSideConnection,
@@ -214,6 +214,72 @@ function mapMessageContentBlock(content: TextContent | ImageContent): ContentBlo
   };
 }
 
+function expandToolPath(filePath: string): string {
+  if (filePath === "~") {
+    return homedir();
+  }
+
+  if (filePath.startsWith("~/")) {
+    return `${homedir()}${filePath.slice(1)}`;
+  }
+
+  return filePath.startsWith("@") ? filePath.slice(1) : filePath;
+}
+
+function getHistoricalPathArg(args: Record<string, unknown>): string | undefined {
+  return typeof args.path === "string"
+    ? args.path
+    : typeof args.file_path === "string"
+      ? args.file_path
+      : undefined;
+}
+
+function resolveHistoricalToolPath(args: Record<string, unknown>, cwd: string): string | undefined {
+  const path = getHistoricalPathArg(args);
+  if (!path) {
+    return undefined;
+  }
+
+  const expanded = expandToolPath(path);
+  return isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
+}
+
+function extractHistoricalFirstChangedLine(result: unknown): number | undefined {
+  if (typeof result !== "object" || result === null) {
+    return undefined;
+  }
+
+  const details = (result as { details?: { firstChangedLine?: unknown } }).details;
+  return typeof details?.firstChangedLine === "number" ? details.firstChangedLine : undefined;
+}
+
+function buildHistoricalToolContext(
+  toolName: string,
+  args: Record<string, unknown>,
+  cwd: string,
+  rawOutput?: unknown,
+): {
+  cwd: string;
+  toolCallState: {
+    toolName: string;
+    path?: string;
+    firstChangedLine?: number;
+    rawInput: Record<string, unknown>;
+    rawOutput?: unknown;
+  };
+} {
+  return {
+    cwd,
+    toolCallState: {
+      toolName,
+      path: resolveHistoricalToolPath(args, cwd),
+      firstChangedLine: extractHistoricalFirstChangedLine(rawOutput),
+      rawInput: args,
+      rawOutput,
+    },
+  };
+}
+
 async function replayContentChunks(
   connection: AgentSideConnection,
   sessionId: string,
@@ -242,6 +308,7 @@ function buildHistoricalToolResult(message: ToolResultMessage): {
 async function replayAssistantMessage(
   connection: AgentSideConnection,
   sessionId: string,
+  cwd: string,
   message: AssistantMessage,
   historicalToolCalls: Map<string, HistoricalToolCall>,
 ): Promise<void> {
@@ -270,11 +337,15 @@ async function replayAssistantMessage(
 
       await emitSessionNotification(
         connection,
-        mapToolExecutionStart(sessionId, {
-          toolCallId: toolCallPart.id,
-          toolName: toolCallPart.name,
-          args: toolCallPart.arguments,
-        }),
+        mapToolExecutionStart(
+          sessionId,
+          {
+            toolCallId: toolCallPart.id,
+            toolName: toolCallPart.name,
+            args: toolCallPart.arguments,
+          },
+          buildHistoricalToolContext(toolCallPart.name, toolCallPart.arguments, cwd),
+        ),
       );
     }
   }
@@ -283,6 +354,7 @@ async function replayAssistantMessage(
 async function replayHistoricalToolResult(
   connection: AgentSideConnection,
   sessionId: string,
+  cwd: string,
   message: ToolResultMessage,
   historicalToolCalls: Map<string, HistoricalToolCall>,
 ): Promise<void> {
@@ -291,11 +363,15 @@ async function replayHistoricalToolResult(
   if (!existing) {
     await emitSessionNotification(
       connection,
-      mapToolExecutionStart(sessionId, {
-        toolCallId: message.toolCallId,
-        toolName: message.toolName,
-        args: {},
-      }),
+      mapToolExecutionStart(
+        sessionId,
+        {
+          toolCallId: message.toolCallId,
+          toolName: message.toolName,
+          args: {},
+        },
+        buildHistoricalToolContext(message.toolName, {}, cwd),
+      ),
     );
   }
 
@@ -312,13 +388,12 @@ async function replayHistoricalToolResult(
         result,
         isError: message.isError,
       },
-      {
-        toolCallState: {
-          toolName: existing?.toolName ?? message.toolName,
-          rawInput: existing?.args,
-          rawOutput: result,
-        },
-      },
+      buildHistoricalToolContext(
+        existing?.toolName ?? message.toolName,
+        existing?.args ?? {},
+        cwd,
+        result,
+      ),
     ),
   );
 
@@ -328,6 +403,7 @@ async function replayHistoricalToolResult(
 async function replayHistoricalBashExecution(
   connection: AgentSideConnection,
   sessionId: string,
+  cwd: string,
   index: number,
   message: {
     command: string;
@@ -343,11 +419,15 @@ async function replayHistoricalBashExecution(
 
   await emitSessionNotification(
     connection,
-    mapToolExecutionStart(sessionId, {
-      toolCallId,
-      toolName: "bash",
-      args,
-    }),
+    mapToolExecutionStart(
+      sessionId,
+      {
+        toolCallId,
+        toolName: "bash",
+        args,
+      },
+      buildHistoricalToolContext("bash", args, cwd),
+    ),
   );
 
   const result = {
@@ -370,13 +450,7 @@ async function replayHistoricalBashExecution(
         isError:
           message.cancelled || (typeof message.exitCode === "number" && message.exitCode !== 0),
       },
-      {
-        toolCallState: {
-          toolName: "bash",
-          rawInput: args,
-          rawOutput: result,
-        },
-      },
+      buildHistoricalToolContext("bash", args, cwd, result),
     ),
   );
 }
@@ -385,6 +459,7 @@ export async function replaySessionHistory(
   connection: AgentSideConnection,
   sessionId: string,
   session: AgentSession,
+  cwd: string,
 ): Promise<void> {
   const historicalToolCalls = new Map<string, HistoricalToolCall>();
 
@@ -399,17 +474,17 @@ export async function replaySessionHistory(
     }
 
     if (message.role === "assistant") {
-      await replayAssistantMessage(connection, sessionId, message, historicalToolCalls);
+      await replayAssistantMessage(connection, sessionId, cwd, message, historicalToolCalls);
       continue;
     }
 
     if (message.role === "toolResult") {
-      await replayHistoricalToolResult(connection, sessionId, message, historicalToolCalls);
+      await replayHistoricalToolResult(connection, sessionId, cwd, message, historicalToolCalls);
       continue;
     }
 
     if (message.role === "bashExecution") {
-      await replayHistoricalBashExecution(connection, sessionId, index, message);
+      await replayHistoricalBashExecution(connection, sessionId, cwd, index, message);
     }
   }
 }
