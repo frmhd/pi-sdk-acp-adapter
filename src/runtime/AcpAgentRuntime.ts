@@ -234,7 +234,12 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
   );
 
   const authorizedRoots = getAuthorizedRoots(options.cwd, options.additionalDirectories ?? []);
-  const readOps: ReadOperations = new AcpReadOperations(acpClient, { authorizedRoots });
+  const acpReadRoots = getAuthorizedRoots(options.cwd);
+  const readOps: ReadOperations = new AcpReadOperations(acpClient, {
+    authorizedRoots,
+    acpReadRoots,
+    enableLocalReadFallback: true,
+  });
   const baseWriteOps: WriteOperations = new AcpWriteOperations(acpClient, { authorizedRoots });
 
   const activeMutationToolCalls = new Map<string, string>();

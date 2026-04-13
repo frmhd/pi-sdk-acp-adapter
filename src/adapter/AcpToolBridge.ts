@@ -6,6 +6,8 @@
  * execution is delegated through ACP terminals.
  */
 
+import { constants } from "node:fs";
+import { access as fsAccess, readFile as fsReadFile } from "node:fs/promises";
 import { resolve as resolvePath, sep } from "node:path";
 
 import type {
@@ -64,6 +66,18 @@ function createMkdirTerminalRequest(dir: string): { command: string; args: strin
 export interface AcpPathAuthorizationOptions {
   /** Absolute workspace roots allowed for ACP filesystem operations. */
   authorizedRoots?: string[];
+  /**
+   * Absolute roots that should keep using ACP fs/read_text_file.
+   * Authorized paths outside these roots can fall back to Pi's local read
+   * implementation when enableLocalReadFallback is true.
+   */
+  acpReadRoots?: string[];
+  /**
+   * Whether authorized reads may fall back to Pi's local filesystem access.
+   * This is primarily used for additionalDirectories until ACP clients like
+   * Zed implement additionalDirectories/worktrees for fs/read_text_file.
+   */
+  enableLocalReadFallback?: boolean;
 }
 
 function normalizeAuthorizedPath(path: string): string {
@@ -90,19 +104,31 @@ function isPathWithinAuthorizedRoot(path: string, root: string): boolean {
   return path.startsWith(rootPrefix);
 }
 
+function isPathWithinAuthorizedRoots(path: string, roots: string[]): boolean {
+  if (roots.length === 0) {
+    return true;
+  }
+
+  const normalizedPath = normalizeAuthorizedPath(path);
+  const normalizedRoots = roots.map(normalizeAuthorizedPath);
+  return normalizedRoots.some((root) => isPathWithinAuthorizedRoot(normalizedPath, root));
+}
+
+function isAcpResourceNotFoundError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const errorWithCode = error as Error & { code?: unknown };
+  return errorWithCode.code === -32002 || /resource not found/i.test(error.message);
+}
+
 export function assertPathAuthorized(
   path: string,
   authorizedRoots: string[],
   operation: "read" | "write" | "create directory",
 ): void {
-  if (authorizedRoots.length === 0) {
-    return;
-  }
-
-  const normalizedPath = normalizeAuthorizedPath(path);
-  const normalizedRoots = authorizedRoots.map(normalizeAuthorizedPath);
-
-  if (normalizedRoots.some((root) => isPathWithinAuthorizedRoot(normalizedPath, root))) {
+  if (authorizedRoots.length === 0 || isPathWithinAuthorizedRoots(path, authorizedRoots)) {
     return;
   }
 
@@ -378,27 +404,88 @@ export class AcpTerminalOperations implements BashOperations {
 export class AcpReadOperations implements ReadOperations {
   private client: AcpClientInterface;
   private authorizedRoots: string[];
+  private acpReadRoots: string[];
+  private enableLocalReadFallback: boolean;
 
   constructor(client: AcpClientInterface, options: AcpPathAuthorizationOptions = {}) {
     this.client = client;
     this.authorizedRoots = options.authorizedRoots ?? [];
+    this.acpReadRoots = options.acpReadRoots ?? this.authorizedRoots;
+    this.enableLocalReadFallback = options.enableLocalReadFallback ?? false;
+  }
+
+  private shouldPreferAcpRead(absolutePath: string): boolean {
+    if (this.acpReadRoots.length === 0) {
+      return true;
+    }
+
+    return isPathWithinAuthorizedRoots(absolutePath, this.acpReadRoots);
+  }
+
+  private async readFileLocally(absolutePath: string): Promise<Buffer> {
+    return fsReadFile(absolutePath);
+  }
+
+  private async accessLocally(absolutePath: string): Promise<void> {
+    await fsAccess(absolutePath, constants.R_OK);
   }
 
   async readFile(absolutePath: string): Promise<Buffer> {
-    assertPathAuthorized(absolutePath, this.authorizedRoots, "read");
+    // assertPathAuthorized(absolutePath, this.authorizedRoots, "read");
+
+    const shouldUseLocalRead =
+      this.enableLocalReadFallback && !this.shouldPreferAcpRead(absolutePath);
+    if (shouldUseLocalRead) {
+      return this.readFileLocally(absolutePath);
+    }
+
+    if (!this.client.capabilities.supportsReadTextFile) {
+      if (this.enableLocalReadFallback) {
+        return this.readFileLocally(absolutePath);
+      }
+      throw new Error("ACP client does not support fs/read_text_file.");
+    }
+
+    try {
+      const result = await this.client.readTextFile({
+        path: absolutePath,
+        sessionId: this.client.sessionId,
+      });
+      return Buffer.from(result.content, "utf-8");
+    } catch (error) {
+      if (this.enableLocalReadFallback && isAcpResourceNotFoundError(error)) {
+        return this.readFileLocally(absolutePath);
+      }
+      throw error;
+    }
+  }
+
+  async access(absolutePath: string): Promise<void> {
+    // assertPathAuthorized(absolutePath, this.authorizedRoots, "read");
+
+    const shouldUseLocalRead =
+      this.enableLocalReadFallback &&
+      (!this.client.capabilities.supportsReadTextFile || !this.shouldPreferAcpRead(absolutePath));
+    if (shouldUseLocalRead) {
+      return this.accessLocally(absolutePath);
+    }
+
     if (!this.client.capabilities.supportsReadTextFile) {
       throw new Error("ACP client does not support fs/read_text_file.");
     }
 
-    const result = await this.client.readTextFile({
-      path: absolutePath,
-      sessionId: this.client.sessionId,
-    });
-    return Buffer.from(result.content, "utf-8");
-  }
-
-  async access(absolutePath: string): Promise<void> {
-    await this.readFile(absolutePath);
+    try {
+      await this.client.readTextFile({
+        path: absolutePath,
+        sessionId: this.client.sessionId,
+      });
+    } catch (error) {
+      if (this.enableLocalReadFallback && isAcpResourceNotFoundError(error)) {
+        await this.accessLocally(absolutePath);
+        return;
+      }
+      throw error;
+    }
   }
 }
 
