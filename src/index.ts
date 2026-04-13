@@ -8,6 +8,7 @@
 // Re-export types
 export type {
   AcpSessionState,
+  AcpClientCapabilitiesSnapshot,
   ModelInfo,
   SessionConfigOptions,
   MappedNotification,
@@ -38,6 +39,12 @@ export type {
 export type { ThinkingLevel, AgentEvent } from "./adapter/types.js";
 
 export type { Model, Provider, AssistantMessageEvent } from "./adapter/types.js";
+
+export {
+  captureClientCapabilities,
+  getMissingRequiredClientCapabilities,
+  createMissingClientCapabilitiesMessage,
+} from "./adapter/types.js";
 
 // Re-export session config functions
 export {

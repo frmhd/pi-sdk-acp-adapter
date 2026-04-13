@@ -2,11 +2,11 @@
  * ACP Agent Runtime Factory
  *
  * Creates Pi AgentSessions configured for ACP protocol usage.
- * Tools (read, write, edit, bash, grep, find, ls) are delegated to the ACP client
- * via terminal/fs operations instead of local filesystem/child_process.
+ * Pi's 4 core tools (read, write, edit, bash) are delegated to the ACP client
+ * via filesystem and terminal methods instead of local process access.
  */
 
-import type { AgentSideConnection } from "@agentclientprotocol/sdk";
+import type { AgentSideConnection, EnvVariable, TerminalHandle } from "@agentclientprotocol/sdk";
 
 import type {
   ModelRegistry,
@@ -34,34 +34,44 @@ import {
   type AcpClientInterface,
 } from "../adapter/AcpToolBridge.js";
 
+import {
+  type AcpClientCapabilitiesSnapshot,
+  createMissingClientCapabilitiesMessage,
+  getMissingRequiredClientCapabilities,
+} from "../adapter/types.js";
+
 // =============================================================================
 // ACP Client Adapter
 // =============================================================================
 
 /**
- * Adapts ACP connection to AcpClientInterface for tool operations.
- *
- * The ACP protocol requires specific params for terminal creation:
- * - `sessionId` is mandatory
- * - `env` must be `EnvVariable[]` format: `{name: string, value: string}[]`
- * - No `terminalId` or `size` fields in the request
+ * Adapts an ACP connection to the tool bridge interface used by Pi tools.
  */
 class AcpConnectionAdapter implements AcpClientInterface {
   private connection: AgentSideConnection;
   public readonly sessionId: string;
+  public readonly capabilities: AcpClientCapabilitiesSnapshot;
 
-  constructor(connection: AgentSideConnection, sessionId: string) {
+  constructor(
+    connection: AgentSideConnection,
+    sessionId: string,
+    capabilities: AcpClientCapabilitiesSnapshot,
+  ) {
     this.connection = connection;
     this.sessionId = sessionId;
+    this.capabilities = capabilities;
   }
 
   createTerminal(params: {
     command: string;
     cwd?: string;
-    env?: import("@agentclientprotocol/sdk").EnvVariable[];
+    env?: EnvVariable[];
     sessionId: string;
-  }): Promise<import("@agentclientprotocol/sdk").TerminalHandle> {
-    // Transform params to ACP CreateTerminalRequest format
+  }): Promise<TerminalHandle> {
+    if (!this.capabilities.supportsTerminal) {
+      throw new Error("ACP client does not support terminal/create.");
+    }
+
     return this.connection.createTerminal({
       command: params.command,
       cwd: params.cwd ?? null,
@@ -70,16 +80,25 @@ class AcpConnectionAdapter implements AcpClientInterface {
     });
   }
 
-  async readTextFile(params: { path: string }): Promise<{ content: string }> {
+  async readTextFile(params: { path: string; sessionId: string }): Promise<{ content: string }> {
+    if (!this.capabilities.supportsReadTextFile) {
+      throw new Error("ACP client does not support fs/read_text_file.");
+    }
+
     return this.connection.readTextFile({
-      ...params,
+      path: params.path,
       sessionId: this.sessionId,
     });
   }
 
-  async writeTextFile(params: { path: string; content: string }): Promise<void> {
-    return this.connection.writeTextFile({
-      ...params,
+  async writeTextFile(params: { path: string; content: string; sessionId: string }): Promise<void> {
+    if (!this.capabilities.supportsWriteTextFile) {
+      throw new Error("ACP client does not support fs/write_text_file.");
+    }
+
+    await this.connection.writeTextFile({
+      path: params.path,
+      content: params.content,
       sessionId: this.sessionId,
     });
   }
@@ -103,6 +122,8 @@ export interface CreateAcpAgentRuntimeOptions {
   modelRegistry: ModelRegistry;
   /** ACP connection for tool delegation */
   acpConnection: AgentSideConnection;
+  /** Normalized client capabilities captured during initialize() */
+  clientCapabilities: AcpClientCapabilitiesSnapshot;
   /** Session ID for terminal requests (required for ACP protocol) */
   sessionId?: string;
   /** Default thinking level */
@@ -117,34 +138,27 @@ export interface CreateAcpAgentRuntimeOptions {
 
 /**
  * Creates a Pi AgentSession configured to use ACP for tool operations.
- *
- * This factory creates a Pi AgentSession where all tool operations are
- * delegated to the ACP client instead of local filesystem/child_process:
- * - read → ACP fs.readTextFile
- * - write → ACP fs.writeTextFile
- * - edit → ACP fs.readTextFile + writeTextFile
- * - bash → ACP terminal
- * - grep → ACP terminal (grep command)
- * - find → ACP terminal (find command)
- * - ls → ACP terminal (ls command)
- *
- * @param options - Runtime creation options
- * @returns Created AgentSession and dispose function
  */
 export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOptions): Promise<{
   session: AgentSession;
   dispose: () => void;
 }> {
+  const missingCapabilities = getMissingRequiredClientCapabilities(options.clientCapabilities);
+  if (missingCapabilities.length > 0) {
+    throw new Error(createMissingClientCapabilitiesMessage(missingCapabilities));
+  }
+
   const { createAgentSession } = await import("@mariozechner/pi-coding-agent");
 
-  // Create ACP client adapter with session ID
-  const acpClient = new AcpConnectionAdapter(options.acpConnection, options.sessionId || "default");
+  const acpClient = new AcpConnectionAdapter(
+    options.acpConnection,
+    options.sessionId || "default",
+    options.clientCapabilities,
+  );
 
-  // Create ACP operation bridges
   const readOps: ReadOperations = new AcpReadOperations(acpClient);
   const writeOps: WriteOperations = new AcpWriteOperations(acpClient);
 
-  // For diff support (Gemini CLI feature parity)
   const editContents = new Map<string, string>();
 
   const editOps: EditOperations = {
@@ -163,9 +177,9 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
     },
     access: async (path: string) => readOps.access(path),
   };
+
   const bashOps: BashOperations = new AcpTerminalOperations(acpClient);
 
-  // Create tools with ACP delegation
   const tools = [
     createReadTool(options.cwd, { operations: readOps }),
     createWriteTool(options.cwd, { operations: writeOps }),
@@ -173,20 +187,17 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
     createBashTool(options.cwd, { operations: bashOps }),
   ];
 
-  // Create session with custom tools
   const sessionOptions: CreateAgentSessionOptions = {
     cwd: options.cwd,
     agentDir: options.agentDir,
     modelRegistry: options.modelRegistry,
     thinkingLevel: options.thinkingLevel || "medium",
     tools: [],
-    customTools: tools, // Use customTools to override built-in tools
+    customTools: tools,
   };
 
-  // Create the session
   const { session } = await createAgentSession(sessionOptions);
 
-  // Return session with dispose function
   return {
     session,
     dispose: () => {
@@ -201,13 +212,6 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
 
 /**
  * Creates a runtime factory function for use with AcpAgent.
- *
- * This allows AcpAgent to create sessions on demand without
- * importing the runtime module directly.
- *
- * @param acpConnection - ACP connection for tool delegation
- * @param agentDir - Agent configuration directory
- * @returns Factory function for creating sessions
  */
 export function createAcpAgentRuntimeFactory(
   acpConnection: AgentSideConnection,

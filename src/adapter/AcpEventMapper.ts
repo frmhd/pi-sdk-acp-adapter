@@ -110,21 +110,6 @@ export function mapToolExecutionStart(
         locations.push({ path: args.path });
       }
       break;
-    case "ls":
-    case "list":
-      if (typeof args.path === "string") {
-        title = `Listing: ${args.path}`;
-        locations.push({ path: args.path });
-      } else {
-        title = "Listing directory";
-      }
-      break;
-    case "grep":
-    case "search":
-      if (typeof args.pattern === "string") {
-        title = `Searching for: ${args.pattern}`;
-      }
-      break;
   }
 
   const toolCall: ToolCall = {

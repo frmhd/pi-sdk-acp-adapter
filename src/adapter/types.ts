@@ -18,6 +18,7 @@ import type {
   ToolKind,
   StopReason,
   ContentBlock,
+  ClientCapabilities,
 } from "@agentclientprotocol/sdk";
 
 import type {
@@ -40,6 +41,8 @@ export interface AcpSessionState {
   sessionId: string;
   /** Underlying Pi AgentSession instance */
   session: AgentSession | null;
+  /** Cleanup hook for the Pi runtime backing this session */
+  dispose: (() => void) | null;
   /** Working directory for this session */
   cwd: string;
   /** Additional workspace directories beyond cwd */
@@ -54,6 +57,60 @@ export interface AcpSessionState {
     oldText: string;
     newText: string;
   };
+}
+
+// =============================================================================
+// Client Capabilities
+// =============================================================================
+
+/** Normalized ACP client capabilities used by the adapter/runtime layers. */
+export interface AcpClientCapabilitiesSnapshot {
+  /** Raw client capabilities from initialize(). */
+  raw: ClientCapabilities | null;
+  /** Whether the client can service fs/read_text_file. */
+  supportsReadTextFile: boolean;
+  /** Whether the client can service fs/write_text_file. */
+  supportsWriteTextFile: boolean;
+  /** Whether the client can service terminal methods. */
+  supportsTerminal: boolean;
+}
+
+/** Capture and normalize client capabilities advertised during initialize(). */
+export function captureClientCapabilities(
+  capabilities?: ClientCapabilities | null,
+): AcpClientCapabilitiesSnapshot {
+  return {
+    raw: capabilities ?? null,
+    supportsReadTextFile: capabilities?.fs?.readTextFile === true,
+    supportsWriteTextFile: capabilities?.fs?.writeTextFile === true,
+    supportsTerminal: capabilities?.terminal === true,
+  };
+}
+
+/** Get the list of ACP client capabilities required for Pi's 4-tool surface. */
+export function getMissingRequiredClientCapabilities(
+  capabilities: AcpClientCapabilitiesSnapshot,
+): string[] {
+  const missing: string[] = [];
+
+  if (!capabilities.supportsReadTextFile) {
+    missing.push("fs.readTextFile");
+  }
+
+  if (!capabilities.supportsWriteTextFile) {
+    missing.push("fs.writeTextFile");
+  }
+
+  if (!capabilities.supportsTerminal) {
+    missing.push("terminal");
+  }
+
+  return missing;
+}
+
+/** Create a user-facing incompatibility message for missing ACP client capabilities. */
+export function createMissingClientCapabilitiesMessage(missing: string[]): string {
+  return `Pi Coding Agent requires ACP client capabilities: ${missing.join(", ")}. This client is not compatible with Pi's read/write/edit/bash tool surface.`;
 }
 
 // =============================================================================
@@ -107,10 +164,6 @@ export function mapToolKind(toolName: string): ToolKind {
       return "move";
     case "bash":
       return "execute";
-    case "grep":
-    case "find":
-    case "ls":
-      return "search";
     case "write":
     default:
       return "other";
@@ -212,6 +265,7 @@ export type {
   ToolKind,
   StopReason,
   ContentBlock,
+  ClientCapabilities,
 };
 
 export type { AgentSession, AgentSessionEvent, AgentSessionEventListener };

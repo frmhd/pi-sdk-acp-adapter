@@ -1,11 +1,13 @@
 /**
- * Phase 1 Tests - Core Adapter Infrastructure
- *
- * Tests for types and event mapper functionality.
+ * Core adapter tests.
  */
 
-import { expect, test, describe } from "vite-plus/test";
+import { readFile } from "node:fs/promises";
+
+import { expect, test, describe, vi } from "vite-plus/test";
+
 import {
+  AcpAgent,
   mapToolKind,
   mapStopReason,
   createToolCallContent,
@@ -13,6 +15,50 @@ import {
   mapToolExecutionUpdate,
   mapToolExecutionEnd,
 } from "../src/index.ts";
+
+function createMockSession() {
+  return {
+    state: {
+      messages: [],
+      model: undefined,
+    },
+    thinkingLevel: "medium",
+    dispose: vi.fn(),
+    subscribe: vi.fn(() => () => {}),
+    prompt: vi.fn(async () => undefined),
+    abort: vi.fn(async () => undefined),
+  } as any;
+}
+
+function createTestAgent(
+  createRuntime:
+    | ((options: any) => Promise<{ session: any; dispose: () => void }>)
+    | undefined = undefined,
+) {
+  return new AcpAgent(
+    {} as any,
+    {
+      modelRegistry: {
+        getAvailable: () => [],
+      } as any,
+    },
+    createRuntime ??
+      (async () => ({
+        session: createMockSession(),
+        dispose: vi.fn(),
+      })),
+  );
+}
+
+async function getPackageVersion(): Promise<string> {
+  const packageJson = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf-8"),
+  ) as {
+    version: string;
+  };
+
+  return packageJson.version;
+}
 
 describe("Type Definitions", () => {
   test("mapToolKind maps read to read", () => {
@@ -27,12 +73,10 @@ describe("Type Definitions", () => {
     expect(mapToolKind("bash")).toBe("execute");
   });
 
-  test("mapToolKind maps grep to search", () => {
-    expect(mapToolKind("grep")).toBe("search");
-  });
-
-  test("mapToolKind maps find to search", () => {
-    expect(mapToolKind("find")).toBe("search");
+  test("mapToolKind keeps non-Pi bridge tools out of the public surface", () => {
+    expect(mapToolKind("grep")).toBe("other");
+    expect(mapToolKind("find")).toBe("other");
+    expect(mapToolKind("ls")).toBe("other");
   });
 
   test("mapToolKind maps write to other", () => {
@@ -41,6 +85,95 @@ describe("Type Definitions", () => {
 
   test("mapToolKind maps unknown to other", () => {
     expect(mapToolKind("unknown_tool")).toBe("other");
+  });
+});
+
+describe("AcpAgent initialize", () => {
+  test("returns Pi identity, package version, and honest capabilities", async () => {
+    const agent = createTestAgent();
+
+    const response = await agent.initialize({
+      protocolVersion: 1,
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: true,
+      },
+    });
+
+    expect(response.protocolVersion).toBe(1);
+    expect(response.agentInfo).toEqual({
+      name: "pi",
+      title: "Pi Coding Agent",
+      version: await getPackageVersion(),
+    });
+    expect(response.agentCapabilities?.loadSession).toBe(false);
+    expect(response.agentCapabilities?.sessionCapabilities?.list).toBeNull();
+    expect(response.agentCapabilities?.sessionCapabilities?.resume).toBeNull();
+    expect(response.agentCapabilities?.sessionCapabilities?.close).toEqual({});
+    expect(agent.getClientCapabilities()).toMatchObject({
+      supportsReadTextFile: true,
+      supportsWriteTextFile: true,
+      supportsTerminal: true,
+    });
+  });
+
+  test("fails early when required client capabilities are missing", async () => {
+    const agent = createTestAgent();
+
+    await expect(
+      agent.initialize({
+        protocolVersion: 1,
+        clientCapabilities: {
+          fs: { readTextFile: true, writeTextFile: false },
+          terminal: false,
+        },
+      }),
+    ).rejects.toThrow(/requires ACP client capabilities: fs.writeTextFile, terminal/i);
+
+    expect(agent.getClientCapabilities()).toMatchObject({
+      supportsReadTextFile: true,
+      supportsWriteTextFile: false,
+      supportsTerminal: false,
+    });
+  });
+
+  test("passes captured client capabilities through to runtime creation", async () => {
+    const createRuntime = vi.fn(async (_options: any) => ({
+      session: createMockSession(),
+      dispose: vi.fn(),
+    }));
+    const agent = createTestAgent(createRuntime);
+
+    await agent.initialize({
+      protocolVersion: 1,
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: true,
+      },
+    });
+
+    await agent.newSession({
+      cwd: "/tmp/project",
+    } as any);
+
+    expect(createRuntime).toHaveBeenCalledTimes(1);
+    expect(createRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientCapabilities: expect.objectContaining({
+          supportsReadTextFile: true,
+          supportsWriteTextFile: true,
+          supportsTerminal: true,
+        }),
+      }),
+    );
+  });
+
+  test("loadSession rejects until real persistence exists", async () => {
+    const agent = createTestAgent();
+
+    await expect(agent.loadSession({ sessionId: "session-1" } as any)).rejects.toThrow(
+      /loadSession is not supported yet/i,
+    );
   });
 });
 
@@ -143,7 +276,6 @@ describe("Tool Execution Update Mapping", () => {
       partialResult: null,
     });
 
-    // Should have content or not depending on implementation
     expect(notification).toBeDefined();
   });
 });

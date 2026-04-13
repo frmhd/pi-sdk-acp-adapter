@@ -36,9 +36,15 @@ import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 
-import type { AcpSessionState } from "./types.js";
+import type { AcpClientCapabilitiesSnapshot, AcpSessionState } from "./types.js";
 
 import { mapAgentEvent, mapStopReason } from "./AcpEventMapper.js";
+
+import {
+  captureClientCapabilities,
+  createMissingClientCapabilitiesMessage,
+  getMissingRequiredClientCapabilities,
+} from "./types.js";
 
 import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
 
@@ -50,6 +56,7 @@ import {
 } from "./AcpSessionConfig.js";
 
 import type { CreateAcpAgentRuntimeOptions } from "../runtime/AcpAgentRuntime.js";
+import { ACP_AGENT_NAME, ACP_AGENT_TITLE, ADAPTER_VERSION } from "../packageMetadata.js";
 
 // =============================================================================
 // ACP Protocol Version
@@ -168,6 +175,8 @@ export class AcpAgent implements Agent {
   private connection: AgentSideConnection;
   private sessions: Map<string, AcpSessionState>;
   private config: AcpAdapterConfig;
+  private initialized = false;
+  private clientCapabilities: AcpClientCapabilitiesSnapshot = captureClientCapabilities();
   private createRuntime: (options: CreateAcpAgentRuntimeOptions) => Promise<{
     session: import("@mariozechner/pi-coding-agent").AgentSession;
     dispose: () => void;
@@ -199,36 +208,37 @@ export class AcpAgent implements Agent {
    *
    * @returns Agent capabilities, protocol version, and authentication methods
    */
-  async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
+  async initialize(params: InitializeRequest): Promise<InitializeResponse> {
+    this.initialized = true;
+    this.clientCapabilities = captureClientCapabilities(params.clientCapabilities);
+
+    const missingCapabilities = getMissingRequiredClientCapabilities(this.clientCapabilities);
+    if (missingCapabilities.length > 0) {
+      throw new Error(createMissingClientCapabilitiesMessage(missingCapabilities));
+    }
+
     return {
       protocolVersion: PROTOCOL_VERSION,
       agentInfo: {
-        name: "pi-acp-adapter",
-        title: "Pi Coding Agent (ACP Adapter)",
-        version: "0.1.0",
+        name: ACP_AGENT_NAME,
+        title: ACP_AGENT_TITLE,
+        version: ADAPTER_VERSION,
       },
       agentCapabilities: {
-        // LoadSession enabled (Gemini CLI feature parity)
-        loadSession: true,
-
-        // Prompt capabilities - text only for now (Bug 3 fix: images not implemented)
+        loadSession: false,
         promptCapabilities: {
           image: false,
           audio: false,
           embeddedContext: false,
         },
-
-        // Session capabilities
         sessionCapabilities: {
-          list: null, // No session listing in V1
-          fork: null, // No session fork in V1
-          close: {}, // Bug 5 fix: implement session close
-          additionalDirectories: null, // Additional directories not supported in V1
-          resume: null, // No session resume in V1
+          list: null,
+          fork: null,
+          close: {},
+          additionalDirectories: null,
+          resume: null,
         },
       },
-
-      // No authentication needed - Pi handles its own auth
       authMethods: [],
     };
   }
@@ -242,12 +252,15 @@ export class AcpAgent implements Agent {
    * @returns Session ID and initial configuration options
    */
   async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
+    this.assertReadyForSessions();
+
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
     // Create session state
     const sessionState: AcpSessionState = {
       sessionId,
       session: null,
+      dispose: null,
       cwd: params.cwd,
       additionalDirectories: params.additionalDirectories || [],
       currentModelId: undefined,
@@ -261,7 +274,8 @@ export class AcpAgent implements Agent {
       additionalDirectories: params.additionalDirectories || [],
       modelRegistry: this.config.modelRegistry,
       acpConnection: this.connection,
-      sessionId, // Pass sessionId for terminal requests
+      clientCapabilities: this.clientCapabilities,
+      sessionId,
       // Gemini CLI feature parity: capture edits for diff support
       onEditCaptured: (path, oldText, newText) => {
         sessionState.lastEditDiff = { path, oldText, newText };
@@ -269,9 +283,10 @@ export class AcpAgent implements Agent {
     };
 
     try {
-      const { session } = await this.createRuntime(createSessionRuntimeOptions);
+      const { session, dispose } = await this.createRuntime(createSessionRuntimeOptions);
 
       sessionState.session = session;
+      sessionState.dispose = dispose;
 
       // Store session
       this.sessions.set(sessionId, sessionState);
@@ -310,19 +325,10 @@ export class AcpAgent implements Agent {
    * @param params - Load session request with session ID
    * @returns Session ID and current configuration options
    */
-  async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
-    const sessionState = this.sessions.get(params.sessionId);
-
-    if (!sessionState || !sessionState.session) {
-      throw new Error(`Session ${params.sessionId} not found`);
-    }
-
-    const availableModels = getAvailableModels(this.config.modelRegistry);
-    const configOptions = getCurrentConfigOptions(sessionState, availableModels);
-
-    return {
-      configOptions,
-    };
+  async loadSession(_params: LoadSessionRequest): Promise<LoadSessionResponse> {
+    throw new Error(
+      "loadSession is not supported yet. Pi ACP sessions are currently process-local only until Phase 3 session persistence is implemented.",
+    );
   }
 
   /**
@@ -490,23 +496,20 @@ export class AcpAgent implements Agent {
    * @param params - Close session request with session ID
    */
   async unstable_closeSession(params: CloseSessionRequest): Promise<CloseSessionResponse> {
-    const sessionState = this.sessions.get(params.sessionId);
-
-    if (sessionState) {
-      // Dispose the Pi session if it exists
-      if (sessionState.session) {
-        sessionState.session.dispose();
-      }
-
-      this.sessions.delete(params.sessionId);
-    }
-
+    await this.closeSession(params.sessionId);
     return {};
   }
 
   // =============================================================================
   // Session Management Helpers
   // =============================================================================
+
+  /**
+   * Get the normalized ACP client capabilities captured during initialize().
+   */
+  getClientCapabilities(): AcpClientCapabilitiesSnapshot {
+    return this.clientCapabilities;
+  }
 
   /**
    * Get a session by ID.
@@ -536,11 +539,9 @@ export class AcpAgent implements Agent {
     const sessionState = this.sessions.get(sessionId);
 
     if (sessionState) {
-      // Dispose the Pi session if it exists
-      if (sessionState.session) {
-        sessionState.session.dispose();
-      }
-
+      sessionState.dispose?.();
+      sessionState.session = null;
+      sessionState.dispose = null;
       this.sessions.delete(sessionId);
     }
   }
@@ -551,6 +552,17 @@ export class AcpAgent implements Agent {
   async shutdown(): Promise<void> {
     for (const sessionId of this.sessions.keys()) {
       await this.closeSession(sessionId);
+    }
+  }
+
+  private assertReadyForSessions(): void {
+    if (!this.initialized) {
+      throw new Error("ACP initialize() must complete before creating Pi sessions.");
+    }
+
+    const missingCapabilities = getMissingRequiredClientCapabilities(this.clientCapabilities);
+    if (missingCapabilities.length > 0) {
+      throw new Error(createMissingClientCapabilitiesMessage(missingCapabilities));
     }
   }
 }

@@ -7,18 +7,18 @@ Legend:
 
 ## Current Focus
 
-- [ ] Start Phase 0
+- [x] Start Phase 0
 
 ## Phase 0 — Correctness and Honesty
 
-- [ ] Derive agent identity/version from package metadata instead of hardcoding
-- [ ] Rename ACP agent presentation to Pi-facing values (`pi`, `Pi Coding Agent`)
-- [ ] Capture and store client capabilities from `initialize()`
-- [ ] Stop advertising unsupported capabilities (`loadSession`, `session.list`, `session.resume`) until real
-- [ ] Add clean degradation or explicit errors when required client fs/terminal capabilities are unavailable
-- [ ] Remove or quarantine non-Pi bridge code paths (`grep`, `find`, `ls`) from the adapter surface
-- [ ] Add/update tests for initialize capability advertisement
-- [ ] Verify Phase 0 with `vp check` and `vp test`
+- [x] Derive agent identity/version from package metadata instead of hardcoding
+- [x] Rename ACP agent presentation to Pi-facing values (`pi`, `Pi Coding Agent`)
+- [x] Capture and store client capabilities from `initialize()`
+- [x] Stop advertising unsupported capabilities (`loadSession`, `session.list`, `session.resume`) until real
+- [x] Add clean degradation or explicit errors when required client fs/terminal capabilities are unavailable
+- [x] Remove or quarantine non-Pi bridge code paths (`grep`, `find`, `ls`) from the adapter surface
+- [x] Add/update tests for initialize capability advertisement
+- [x] Verify Phase 0 with `vp check` and `vp test`
 
 ## Phase 1 — Zed Tool UI Alignment
 

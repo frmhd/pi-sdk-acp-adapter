@@ -1,22 +1,25 @@
 /**
  * ACP Tool Bridge
  *
- * Bridges Pi's built-in tools (read, write, edit, bash, grep, find, ls) to ACP tool call protocol.
- * Handles tool input/output conversion and terminal management delegation.
+ * Bridges Pi's 4 core tools (read, write, edit, bash) to ACP client methods.
+ * File operations are delegated through ACP filesystem requests and command
+ * execution is delegated through ACP terminals.
  */
 
-import type { ToolCallContent, ToolKind, TerminalHandle } from "@agentclientprotocol/sdk";
-import type { EnvVariable } from "@agentclientprotocol/sdk";
+import type {
+  ToolCallContent,
+  ToolKind,
+  TerminalHandle,
+  EnvVariable,
+} from "@agentclientprotocol/sdk";
 
 import type {
   BashOperations,
   ReadOperations,
   WriteOperations,
-  LsOperations,
-  GrepOperations,
 } from "@mariozechner/pi-coding-agent";
 
-import { createToolCallContent, mapToolKind } from "./types.js";
+import { createToolCallContent, mapToolKind, type AcpClientCapabilitiesSnapshot } from "./types.js";
 
 // =============================================================================
 // Utils
@@ -56,13 +59,15 @@ export interface ToolBridgeConfig<TInput> {
 }
 
 // =============================================================================
-// ACP Client Interface (subset needed for terminal management)
+// ACP Client Interface (subset needed by Pi's 4 tools)
 // =============================================================================
 
 /** Subset of AgentSideConnection used by the tool bridge */
 export interface AcpClientInterface {
-  /** Session ID for terminal requests */
+  /** Session ID for ACP fs/terminal requests */
   sessionId: string;
+  /** Normalized capabilities captured during initialize() */
+  capabilities: AcpClientCapabilitiesSnapshot;
   /** Create a terminal and execute a command */
   createTerminal(params: {
     command: string;
@@ -80,29 +85,19 @@ export interface AcpClientInterface {
 // Terminal Polling Helper
 // =============================================================================
 
-/**
- * Result from polling a terminal for output
- */
 interface TerminalPollResult {
   output: string;
   exitCode: number | null;
 }
 
-/**
- * Poll terminal until completion and collect output.
- * Handles cumulative output correctly (only captures deltas).
- */
 async function pollTerminalToCompletion(
   terminal: TerminalHandle,
   options?: { signal?: AbortSignal },
 ): Promise<TerminalPollResult> {
   let lastOutputLength = 0;
   let resolved = false;
-
-  // Store accumulated output
   let accumulatedOutput = "";
 
-  // Set up abort handler
   const abortHandler = () => {
     resolved = true;
   };
@@ -111,7 +106,6 @@ async function pollTerminalToCompletion(
     options.signal.addEventListener("abort", abortHandler);
   }
 
-  // Start polling for output
   return new Promise<TerminalPollResult>((resolve, reject) => {
     const poll = async () => {
       if (resolved) {
@@ -121,14 +115,12 @@ async function pollTerminalToCompletion(
       try {
         const output = await terminal.currentOutput();
 
-        // Get new output since last check (handle cumulative output)
         if (output.output.length > lastOutputLength) {
           const newOutput = output.output.slice(lastOutputLength);
           accumulatedOutput += newOutput;
           lastOutputLength = output.output.length;
         }
 
-        // Check if process has exited
         if (output.exitStatus !== undefined) {
           resolved = true;
 
@@ -139,7 +131,6 @@ async function pollTerminalToCompletion(
           return;
         }
 
-        // Schedule next poll
         setTimeout(poll, TERMINAL_POLL_INTERVAL);
       } catch (err) {
         resolved = true;
@@ -147,17 +138,14 @@ async function pollTerminalToCompletion(
       }
     };
 
-    // Start polling
     void poll();
 
-    // Also wait for exit as a backup
     terminal
       .waitForExit()
       .then((exitResponse) => {
         if (resolved) return;
         resolved = true;
 
-        // Final output fetch
         terminal
           .currentOutput()
           .then((finalOutput) => {
@@ -190,11 +178,7 @@ async function pollTerminalToCompletion(
 // Terminal Management
 // =============================================================================
 
-/**
- * ACP Terminal Operations
- * Delegates bash command execution to the ACP client via terminal protocol.
- * Uses polling for output since the terminal API doesn't have an onData callback.
- */
+/** ACP terminal-backed BashOperations implementation. */
 export class AcpTerminalOperations implements BashOperations {
   private client: AcpClientInterface;
 
@@ -214,14 +198,16 @@ export class AcpTerminalOperations implements BashOperations {
   ): Promise<{ exitCode: number | null }> {
     const { onData, signal, timeout } = options;
 
-    // Convert env to ACP format (filter out undefined values)
+    if (!this.client.capabilities.supportsTerminal) {
+      throw new Error("ACP client does not support terminal/create.");
+    }
+
     const env: EnvVariable[] | undefined = options.env
       ? Object.entries(options.env)
           .filter(([, value]) => value !== undefined)
           .map(([name, value]) => ({ name, value: value as string }))
       : undefined;
 
-    // Create terminal via ACP client
     const terminal = await this.client.createTerminal({
       command,
       cwd,
@@ -233,10 +219,8 @@ export class AcpTerminalOperations implements BashOperations {
     let killed = false;
     let resolved = false;
 
-    // Helper to check if we should stop polling
     const shouldStop = () => killed || signal?.aborted || resolved;
 
-    // Start polling for output
     const poll = async () => {
       if (shouldStop()) {
         return;
@@ -245,30 +229,25 @@ export class AcpTerminalOperations implements BashOperations {
       try {
         const output = await terminal.currentOutput();
 
-        // Get new output since last check (output is cumulative)
         if (output.output.length > lastOutputLength) {
           const newOutput = output.output.slice(lastOutputLength);
           onData(Buffer.from(newOutput, "utf-8"));
           lastOutputLength = output.output.length;
         }
 
-        // Check if process has exited
         if (output.exitStatus !== undefined) {
           resolved = true;
           return;
         }
 
-        // Schedule next poll
         setTimeout(poll, TERMINAL_POLL_INTERVAL);
       } catch {
         // Stop polling on error
       }
     };
 
-    // Start polling
     void poll();
 
-    // Set up abort handler
     const abortHandler = () => {
       killed = true;
       void terminal.kill();
@@ -278,7 +257,6 @@ export class AcpTerminalOperations implements BashOperations {
       signal.addEventListener("abort", abortHandler);
     }
 
-    // Set up timeout
     const timeoutHandle = timeout
       ? setTimeout(() => {
           killed = true;
@@ -287,7 +265,6 @@ export class AcpTerminalOperations implements BashOperations {
       : undefined;
 
     try {
-      // Wait for terminal to complete
       const exitResponse = await terminal.waitForExit();
       resolved = true;
 
@@ -300,7 +277,6 @@ export class AcpTerminalOperations implements BashOperations {
       }
       if (timeoutHandle) clearTimeout(timeoutHandle);
 
-      // Release terminal resources
       terminal.release().catch(() => {
         // Ignore release errors
       });
@@ -312,10 +288,7 @@ export class AcpTerminalOperations implements BashOperations {
 // Read Operations Bridge
 // =============================================================================
 
-/**
- * ACP Read Operations
- * Delegates file reading to the ACP client.
- */
+/** ACP Read Operations delegates file reads to the ACP client. */
 export class AcpReadOperations implements ReadOperations {
   private client: AcpClientInterface;
 
@@ -324,6 +297,10 @@ export class AcpReadOperations implements ReadOperations {
   }
 
   async readFile(absolutePath: string): Promise<Buffer> {
+    if (!this.client.capabilities.supportsReadTextFile) {
+      throw new Error("ACP client does not support fs/read_text_file.");
+    }
+
     const result = await this.client.readTextFile({
       path: absolutePath,
       sessionId: this.client.sessionId,
@@ -332,7 +309,6 @@ export class AcpReadOperations implements ReadOperations {
   }
 
   async access(absolutePath: string): Promise<void> {
-    // Try to read to check accessibility
     await this.readFile(absolutePath);
   }
 }
@@ -341,10 +317,7 @@ export class AcpReadOperations implements ReadOperations {
 // Write Operations Bridge
 // =============================================================================
 
-/**
- * ACP Write Operations
- * Delegates file writing to the ACP client.
- */
+/** ACP Write Operations delegates file writes to the ACP client. */
 export class AcpWriteOperations implements WriteOperations {
   private client: AcpClientInterface;
 
@@ -353,6 +326,10 @@ export class AcpWriteOperations implements WriteOperations {
   }
 
   async writeFile(absolutePath: string, content: string): Promise<void> {
+    if (!this.client.capabilities.supportsWriteTextFile) {
+      throw new Error("ACP client does not support fs/write_text_file.");
+    }
+
     await this.client.writeTextFile({
       path: absolutePath,
       content,
@@ -361,7 +338,10 @@ export class AcpWriteOperations implements WriteOperations {
   }
 
   async mkdir(dir: string): Promise<void> {
-    // Use terminal to create directory with mkdir -p
+    if (!this.client.capabilities.supportsTerminal) {
+      throw new Error("ACP client does not support terminal/create.");
+    }
+
     const terminal = await this.client.createTerminal({
       command: `mkdir -p ${escapeBash(dir)}`,
       cwd: dir,
@@ -380,10 +360,7 @@ export class AcpWriteOperations implements WriteOperations {
 // Edit Operations Bridge
 // =============================================================================
 
-/**
- * ACP Edit Operations
- * Delegates file editing to the ACP client using read + write.
- */
+/** ACP Edit Operations delegates edits to ACP read + write methods. */
 export class AcpEditOperations {
   private readOps: AcpReadOperations;
   private writeOps: AcpWriteOperations;
@@ -415,251 +392,21 @@ export class AcpEditOperations {
 }
 
 // =============================================================================
-// Grep Operations Bridge
-// =============================================================================
-
-/**
- * ACP Grep Operations
- * Uses find + read to perform grep-like operations via the ACP client.
- * Implements GrepOperations interface for Pi tool integration.
- */
-export class AcpGrepOperations implements GrepOperations {
-  private client: AcpClientInterface;
-  private readOps: AcpReadOperations;
-
-  constructor(client: AcpClientInterface) {
-    this.client = client;
-    this.readOps = new AcpReadOperations(client);
-  }
-
-  /**
-   * Check if path is a directory.
-   * Uses test command to check if path is a directory.
-   */
-  async isDirectory(absolutePath: string): Promise<boolean> {
-    const cmd = `test -d ${escapeBash(absolutePath)} && echo "true" || echo "false"`;
-
-    try {
-      const terminal = await this.client.createTerminal({
-        command: cmd,
-        cwd: absolutePath,
-        sessionId: this.client.sessionId,
-      });
-
-      try {
-        const result = await pollTerminalToCompletion(terminal);
-        return result.output.trim().includes("true");
-      } finally {
-        terminal.release().catch(() => {});
-      }
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Read file contents for context lines.
-   */
-  async readFile(absolutePath: string): Promise<string> {
-    const buffer = await this.readOps.readFile(absolutePath);
-    return buffer.toString("utf-8");
-  }
-}
-
-// =============================================================================
-// Find Operations Bridge
-// =============================================================================
-
-/**
- * ACP Find Operations
- * Delegates file search to the ACP client.
- */
-export class AcpFindOperations {
-  private client: AcpClientInterface;
-
-  constructor(client: AcpClientInterface) {
-    this.client = client;
-  }
-
-  async exists(absolutePath: string): Promise<boolean> {
-    // Use test -e which is more reliable across BSD/GNU
-    const cmd = `test -e ${escapeBash(absolutePath)} && echo "true" || echo "false"`;
-
-    try {
-      const terminal = await this.client.createTerminal({
-        command: cmd,
-        cwd: absolutePath,
-        sessionId: this.client.sessionId,
-      });
-
-      try {
-        const result = await pollTerminalToCompletion(terminal);
-        return result.output.trim().includes("true");
-      } finally {
-        terminal.release().catch(() => {});
-      }
-    } catch {
-      return false;
-    }
-  }
-
-  async glob(
-    pattern: string,
-    cwd: string,
-    options: { ignore: string[]; limit: number },
-  ): Promise<string[]> {
-    const searchPath = cwd || ".";
-    // Convert glob pattern to find -name pattern if possible
-    const findPattern = pattern.startsWith("**/") ? pattern.slice(3) : pattern;
-
-    // Build ignore arguments for find (prune patterns)
-    const ignoreArgs = options.ignore
-      .filter((p) => p.startsWith("**/"))
-      .map((p) => `-not -path ${escapeBash(p.replace(/^\*\*\//, ""))}`)
-      .join(" ");
-
-    const cmd = `find ${escapeBash(searchPath)} ${ignoreArgs} -name ${escapeBash(findPattern)} -maxdepth 10 2>/dev/null | head -${options.limit || 100}`;
-
-    try {
-      const terminal = await this.client.createTerminal({
-        command: cmd,
-        cwd: searchPath,
-        sessionId: this.client.sessionId,
-      });
-
-      try {
-        const result = await pollTerminalToCompletion(terminal);
-        return result.output.split("\n").filter((line) => line.trim() !== "");
-      } finally {
-        terminal.release().catch(() => {});
-      }
-    } catch {
-      return [];
-    }
-  }
-}
-
-// =============================================================================
-// Ls Operations Bridge
-// =============================================================================
-
-/**
- * ACP Ls Operations
- * Lists directory contents via the ACP client.
- */
-export class AcpLsOperations implements LsOperations {
-  private client: AcpClientInterface;
-
-  constructor(client: AcpClientInterface) {
-    this.client = client;
-  }
-
-  async exists(absolutePath: string): Promise<boolean> {
-    // Use test -e which is more reliable across BSD/GNU
-    const cmd = `test -e ${escapeBash(absolutePath)} && echo "true" || echo "false"`;
-
-    try {
-      const terminal = await this.client.createTerminal({
-        command: cmd,
-        cwd: absolutePath,
-        sessionId: this.client.sessionId,
-      });
-
-      try {
-        const result = await pollTerminalToCompletion(terminal);
-        return result.output.trim().includes("true");
-      } finally {
-        terminal.release().catch(() => {});
-      }
-    } catch {
-      return false;
-    }
-  }
-
-  async stat(absolutePath: string): Promise<{ isDirectory: () => boolean }> {
-    // Use test -d which is more reliable than parsing ls -ld output
-    const cmd = `test -d ${escapeBash(absolutePath)} && echo "true" || echo "false"`;
-
-    try {
-      const terminal = await this.client.createTerminal({
-        command: cmd,
-        cwd: absolutePath,
-        sessionId: this.client.sessionId,
-      });
-
-      try {
-        const result = await pollTerminalToCompletion(terminal);
-        return {
-          isDirectory: () => result.output.trim().includes("true"),
-        };
-      } finally {
-        terminal.release().catch(() => {});
-      }
-    } catch {
-      return {
-        isDirectory: () => false,
-      };
-    }
-  }
-
-  async readdir(absolutePath: string): Promise<string[]> {
-    return this.ls({ path: absolutePath });
-  }
-
-  async ls(options?: { path?: string; limit?: number }): Promise<string[]> {
-    const listPath = options?.path || ".";
-    // Use ls -A1 which doesn't show . and .. but also doesn't show total line
-    const cmd = `ls -A1 ${escapeBash(listPath)} 2>/dev/null || echo ""`;
-
-    try {
-      const terminal = await this.client.createTerminal({
-        command: cmd,
-        cwd: listPath,
-        sessionId: this.client.sessionId,
-      });
-
-      try {
-        const result = await pollTerminalToCompletion(terminal);
-        const lines = result.output
-          .split("\n")
-          .filter((line) => line.trim() !== "")
-          .slice(0, options?.limit || 100);
-
-        return lines;
-      } finally {
-        terminal.release().catch(() => {});
-      }
-    } catch {
-      return [];
-    }
-  }
-}
-
-// =============================================================================
 // Tool Bridge Main Class
 // =============================================================================
 
-/**
- * ACP Tool Bridge
- * Manages all tool operations and delegates to ACP client.
- */
+/** Lazily creates ACP-backed Pi tool operation bridges. */
 export class AcpToolBridge {
   private client: AcpClientInterface;
   private terminalOps?: AcpTerminalOperations;
   private readOps?: AcpReadOperations;
   private writeOps?: AcpWriteOperations;
   private editOps?: AcpEditOperations;
-  private grepOps?: AcpGrepOperations;
-  private findOps?: AcpFindOperations;
-  private lsOps?: AcpLsOperations;
 
   constructor(client: AcpClientInterface) {
     this.client = client;
   }
 
-  /**
-   * Get bash operations for terminal delegation
-   */
   getBashOperations(): BashOperations | undefined {
     if (!this.terminalOps) {
       this.terminalOps = new AcpTerminalOperations(this.client);
@@ -667,9 +414,6 @@ export class AcpToolBridge {
     return this.terminalOps;
   }
 
-  /**
-   * Get read operations for file reading delegation
-   */
   getReadOperations(): ReadOperations | undefined {
     if (!this.readOps) {
       this.readOps = new AcpReadOperations(this.client);
@@ -677,9 +421,6 @@ export class AcpToolBridge {
     return this.readOps;
   }
 
-  /**
-   * Get write operations for file writing delegation
-   */
   getWriteOperations(): WriteOperations | undefined {
     if (!this.writeOps) {
       this.writeOps = new AcpWriteOperations(this.client);
@@ -687,9 +428,6 @@ export class AcpToolBridge {
     return this.writeOps;
   }
 
-  /**
-   * Get edit operations for file editing delegation
-   */
   getEditOperations(): AcpEditOperations | undefined {
     if (!this.editOps) {
       this.editOps = new AcpEditOperations(this.client);
@@ -697,41 +435,8 @@ export class AcpToolBridge {
     return this.editOps;
   }
 
-  /**
-   * Get grep operations for search delegation
-   */
-  getGrepOperations(): AcpGrepOperations | undefined {
-    if (!this.grepOps) {
-      this.grepOps = new AcpGrepOperations(this.client);
-    }
-    return this.grepOps;
-  }
-
-  /**
-   * Get find operations for directory listing delegation
-   */
-  getFindOperations(): AcpFindOperations | undefined {
-    if (!this.findOps) {
-      this.findOps = new AcpFindOperations(this.client);
-    }
-    return this.findOps;
-  }
-
-  /**
-   * Get ls operations for directory listing delegation
-   */
-  getLsOperations(): LsOperations | undefined {
-    if (!this.lsOps) {
-      this.lsOps = new AcpLsOperations(this.client);
-    }
-    return this.lsOps;
-  }
-
-  /**
-   * Check if the client supports terminal operations
-   */
   supportsTerminal(): boolean {
-    return typeof this.client.createTerminal === "function";
+    return this.client.capabilities.supportsTerminal;
   }
 }
 
@@ -739,9 +444,6 @@ export class AcpToolBridge {
 // Tool Definition Mapping
 // =============================================================================
 
-/**
- * Map Pi tool name to ACP tool kind
- */
 export function getAcpToolKind(toolName: string): ToolKind {
   return mapToolKind(toolName);
 }
@@ -750,31 +452,19 @@ export function getAcpToolKind(toolName: string): ToolKind {
 // Output Converters
 // =============================================================================
 
-/**
- * Convert read result to ACP content
- */
 export function convertReadOutput(result: Buffer | string): ToolCallContent[] {
   const text = typeof result === "string" ? result : result.toString("utf-8");
   return [createToolCallContent(text)];
 }
 
-/**
- * Convert write result to ACP content
- */
 export function convertWriteOutput(result: { path: string; written?: boolean }): ToolCallContent[] {
   return [createToolCallContent(`Written to ${result.path}`)];
 }
 
-/**
- * Convert edit result to ACP content
- */
 export function convertEditOutput(result: { path: string; edits: number }): ToolCallContent[] {
   return [createToolCallContent(`Applied ${result.edits} edit(s) to ${result.path}`)];
 }
 
-/**
- * Convert bash result to ACP content
- */
 export function convertBashOutput(result: {
   stdout?: string;
   stderr?: string;
@@ -795,18 +485,4 @@ export function convertBashOutput(result: {
   }
 
   return content;
-}
-
-/**
- * Convert grep result to ACP content
- */
-export function convertGrepOutput(results: string[]): ToolCallContent[] {
-  return [createToolCallContent(results.join("\n"))];
-}
-
-/**
- * Convert find/ls result to ACP content
- */
-export function convertFindOutput(results: string[]): ToolCallContent[] {
-  return [createToolCallContent(results.join("\n"))];
 }
