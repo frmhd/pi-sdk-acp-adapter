@@ -30,15 +30,28 @@ import type {
   ContentBlock,
   CloseSessionRequest,
   CloseSessionResponse,
+  ListSessionsRequest,
+  ListSessionsResponse,
+  ResumeSessionRequest,
+  ResumeSessionResponse,
 } from "@agentclientprotocol/sdk";
 
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { SessionManager, type ModelRegistry } from "@mariozechner/pi-coding-agent";
 
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 
 import type { AcpClientCapabilitiesSnapshot, AcpSessionState, AcpToolCallState } from "./types.js";
 
 import { mapAgentEvent, mapStopReason } from "./AcpEventMapper.js";
+
+import {
+  buildAcpSessionInfo,
+  emitSessionInfoUpdate,
+  getAcpSessionDirectory,
+  getCurrentSessionMetadata,
+  listPersistedPiSessions,
+  replaySessionHistory,
+} from "./AcpSessionLifecycle.js";
 
 import {
   captureClientCapabilities,
@@ -290,18 +303,18 @@ export class AcpAgent implements Agent {
         version: ADAPTER_VERSION,
       },
       agentCapabilities: {
-        loadSession: false,
+        loadSession: true,
         promptCapabilities: {
           image: false,
           audio: false,
           embeddedContext: false,
         },
         sessionCapabilities: {
-          list: null,
+          list: {},
           fork: null,
           close: {},
           additionalDirectories: null,
-          resume: null,
+          resume: {},
         },
       },
       authMethods: [],
@@ -319,69 +332,23 @@ export class AcpAgent implements Agent {
   async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
     this.assertReadyForSessions();
 
-    const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    const sessionManager = SessionManager.create(
+      params.cwd,
+      getAcpSessionDirectory(params.cwd, this.config.agentDir),
+    );
 
-    // Create session state
-    const sessionState: AcpSessionState = {
-      sessionId,
-      session: null,
-      dispose: null,
+    const sessionState = await this.createSessionState({
       cwd: params.cwd,
       additionalDirectories: params.additionalDirectories || [],
-      currentModelId: undefined,
-      currentThinkingLevel: this.config.defaultThinkingLevel || "medium",
-      pendingToolCalls: new Map(),
+      sessionManager,
+    });
+
+    await this.refreshSessionMetadata(sessionState, true);
+
+    return {
+      sessionId: sessionState.sessionId,
+      configOptions: this.getConfigOptions(sessionState),
     };
-
-    // Create Pi AgentSession
-    const createSessionRuntimeOptions: CreateAcpAgentRuntimeOptions = {
-      cwd: params.cwd,
-      agentDir: this.config.agentDir,
-      additionalDirectories: params.additionalDirectories || [],
-      modelRegistry: this.config.modelRegistry,
-      acpConnection: this.connection,
-      clientCapabilities: this.clientCapabilities,
-      sessionId,
-      onToolCallStateCaptured: (toolCallId, update) => {
-        Object.assign(getOrCreateToolCallState(sessionState, toolCallId), update);
-      },
-    };
-
-    try {
-      const { session, dispose } = await this.createRuntime(createSessionRuntimeOptions);
-
-      sessionState.session = session;
-      sessionState.dispose = dispose;
-
-      // Store session
-      this.sessions.set(sessionId, sessionState);
-
-      // Get current model and thinking level from the created session
-      const currentModelId = session.state.model?.id;
-      const currentThinkingLevel = session.thinkingLevel;
-
-      if (currentModelId) {
-        sessionState.currentModelId = currentModelId;
-      }
-
-      if (currentThinkingLevel) {
-        sessionState.currentThinkingLevel = currentThinkingLevel;
-      }
-
-      // Bug 2 fix: Use shared config option builders for consistency
-      const availableModels = getAvailableModels(this.config.modelRegistry);
-      const configOptions = getCurrentConfigOptions(sessionState, availableModels);
-
-      return {
-        sessionId,
-        configOptions,
-      };
-    } catch (error) {
-      console.error(`Failed to create session ${sessionId}:`, error);
-      throw new Error(
-        `Failed to create session: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
   }
 
   /**
@@ -390,10 +357,76 @@ export class AcpAgent implements Agent {
    * @param params - Load session request with session ID
    * @returns Session ID and current configuration options
    */
-  async loadSession(_params: LoadSessionRequest): Promise<LoadSessionResponse> {
-    throw new Error(
-      "loadSession is not supported yet. Pi ACP sessions are currently process-local only until Phase 3 session persistence is implemented.",
-    );
+  async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
+    this.assertReadyForSessions();
+
+    const sessionInfo = await this.findPersistedSessionInfo(params.sessionId, params.cwd);
+    const sessionState = await this.createSessionState({
+      cwd: params.cwd,
+      additionalDirectories: [],
+      sessionManager: SessionManager.open(
+        sessionInfo.path,
+        getAcpSessionDirectory(params.cwd, this.config.agentDir),
+        params.cwd,
+      ),
+    });
+
+    await this.refreshSessionMetadata(sessionState, true);
+    await replaySessionHistory(this.connection, sessionState.sessionId, sessionState.session!);
+
+    return {
+      configOptions: this.getConfigOptions(sessionState),
+    };
+  }
+
+  /**
+   * List persisted Pi-backed sessions.
+   */
+  async unstable_listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
+    if (!this.initialized) {
+      throw new Error("ACP initialize() must complete before listing sessions.");
+    }
+
+    if (params.cursor) {
+      return {
+        sessions: [],
+        nextCursor: null,
+      };
+    }
+
+    const sessions = await listPersistedPiSessions({
+      cwd: params.cwd,
+      agentDir: this.config.agentDir,
+    });
+
+    return {
+      sessions: sessions.map((session) => buildAcpSessionInfo(session)),
+      nextCursor: null,
+    };
+  }
+
+  /**
+   * Resume an existing session without replaying its history.
+   */
+  async unstable_resumeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    this.assertReadyForSessions();
+
+    const sessionInfo = await this.findPersistedSessionInfo(params.sessionId, params.cwd);
+    const sessionState = await this.createSessionState({
+      cwd: params.cwd,
+      additionalDirectories: [],
+      sessionManager: SessionManager.open(
+        sessionInfo.path,
+        getAcpSessionDirectory(params.cwd, this.config.agentDir),
+        params.cwd,
+      ),
+    });
+
+    await this.refreshSessionMetadata(sessionState, true);
+
+    return {
+      configOptions: this.getConfigOptions(sessionState),
+    };
   }
 
   /**
@@ -530,6 +563,9 @@ export class AcpAgent implements Agent {
       throw error;
     } finally {
       unsubscribe();
+      await this.refreshSessionMetadata(sessionState).catch((error) => {
+        console.warn(`Failed to refresh session metadata for ${params.sessionId}:`, error);
+      });
     }
   }
 
@@ -582,8 +618,12 @@ export class AcpAgent implements Agent {
       console.warn(`Config option not applied: ${result.error}`);
     }
 
-    // Return current config state
-    return buildSetSessionConfigOptionResponse(sessionState, availableModels);
+    const response = buildSetSessionConfigOptionResponse(sessionState, availableModels);
+    await this.refreshSessionMetadata(sessionState).catch((error) => {
+      console.warn(`Failed to refresh session metadata for ${params.sessionId}:`, error);
+    });
+
+    return response;
   }
 
   /**
@@ -654,6 +694,105 @@ export class AcpAgent implements Agent {
     return Array.from(this.sessions.keys());
   }
 
+  private getConfigOptions(sessionState: AcpSessionState) {
+    return getCurrentConfigOptions(sessionState, getAvailableModels(this.config.modelRegistry));
+  }
+
+  private async createSessionState(options: {
+    cwd: string;
+    additionalDirectories: string[];
+    sessionManager: SessionManager;
+  }): Promise<AcpSessionState> {
+    const sessionId = options.sessionManager.getSessionId();
+    await this.closeSession(sessionId);
+
+    const sessionState: AcpSessionState = {
+      sessionId,
+      session: null,
+      dispose: null,
+      cwd: options.cwd,
+      additionalDirectories: options.additionalDirectories,
+      currentModelId: undefined,
+      currentThinkingLevel: this.config.defaultThinkingLevel || "medium",
+      title: undefined,
+      updatedAt: undefined,
+      pendingToolCalls: new Map(),
+    };
+
+    const createSessionRuntimeOptions: CreateAcpAgentRuntimeOptions = {
+      cwd: options.cwd,
+      agentDir: this.config.agentDir,
+      additionalDirectories: options.additionalDirectories,
+      modelRegistry: this.config.modelRegistry,
+      acpConnection: this.connection,
+      clientCapabilities: this.clientCapabilities,
+      sessionManager: options.sessionManager,
+      sessionId,
+      onToolCallStateCaptured: (toolCallId, update) => {
+        Object.assign(getOrCreateToolCallState(sessionState, toolCallId), update);
+      },
+    };
+
+    try {
+      const { session, dispose } = await this.createRuntime(createSessionRuntimeOptions);
+
+      if (session.sessionId && session.sessionId !== sessionId) {
+        throw new Error(
+          `Pi session id mismatch: expected ${sessionId}, received ${session.sessionId}`,
+        );
+      }
+
+      sessionState.session = session;
+      sessionState.dispose = dispose;
+      sessionState.currentModelId = session.state.model?.id;
+      sessionState.currentThinkingLevel = session.thinkingLevel;
+      this.sessions.set(sessionId, sessionState);
+      return sessionState;
+    } catch (error) {
+      await releasePendingToolCallResources(sessionState);
+      throw new Error(
+        `Failed to initialize session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  private async findPersistedSessionInfo(sessionId: string, cwd: string) {
+    const sessions = await listPersistedPiSessions({
+      cwd,
+      agentDir: this.config.agentDir,
+    });
+
+    const sessionInfo = sessions.find((session) => session.id === sessionId);
+    if (!sessionInfo) {
+      throw new Error(`Session ${sessionId} not found for cwd ${cwd}`);
+    }
+
+    return sessionInfo;
+  }
+
+  private async refreshSessionMetadata(
+    sessionState: AcpSessionState,
+    force = false,
+  ): Promise<void> {
+    if (!sessionState.session) {
+      return;
+    }
+
+    const metadata = getCurrentSessionMetadata(sessionState.session);
+    const changed =
+      force ||
+      sessionState.title !== metadata.title ||
+      sessionState.updatedAt !== metadata.updatedAt;
+
+    if (!changed) {
+      return;
+    }
+
+    sessionState.title = metadata.title;
+    sessionState.updatedAt = metadata.updatedAt;
+    await emitSessionInfoUpdate(this.connection, sessionState.sessionId, metadata);
+  }
+
   /**
    * Close and remove a session.
    */
@@ -661,6 +800,12 @@ export class AcpAgent implements Agent {
     const sessionState = this.sessions.get(sessionId);
 
     if (sessionState) {
+      try {
+        await sessionState.session?.abort();
+      } catch (error) {
+        console.warn(`Failed to abort session ${sessionId} during close:`, error);
+      }
+
       sessionState.dispose?.();
       await releasePendingToolCallResources(sessionState);
       sessionState.session = null;
@@ -673,7 +818,7 @@ export class AcpAgent implements Agent {
    * Close all sessions and clean up resources.
    */
   async shutdown(): Promise<void> {
-    for (const sessionId of this.sessions.keys()) {
+    for (const sessionId of Array.from(this.sessions.keys())) {
       await this.closeSession(sessionId);
     }
   }

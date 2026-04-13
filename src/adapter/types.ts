@@ -115,6 +115,10 @@ export interface AcpSessionState {
   currentModelId?: string;
   /** Current thinking level in use */
   currentThinkingLevel?: ThinkingLevel;
+  /** Latest title emitted to the ACP client. */
+  title?: string | null;
+  /** Latest updatedAt emitted to the ACP client. */
+  updatedAt?: string | null;
   /** Per-tool-call ACP rendering state captured during execution. */
   pendingToolCalls: Map<string, AcpToolCallState>;
 }

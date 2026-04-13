@@ -18,6 +18,13 @@ import {
 
 function createMockSession() {
   return {
+    sessionId: undefined,
+    sessionName: undefined,
+    sessionManager: {
+      getSessionName: vi.fn(() => undefined),
+      getEntries: vi.fn(() => []),
+      getHeader: vi.fn(() => ({ timestamp: new Date(0).toISOString() })),
+    },
     state: {
       messages: [],
       model: undefined,
@@ -114,9 +121,9 @@ describe("AcpAgent initialize", () => {
       title: "Pi Coding Agent",
       version: await getPackageVersion(),
     });
-    expect(response.agentCapabilities?.loadSession).toBe(false);
-    expect(response.agentCapabilities?.sessionCapabilities?.list).toBeNull();
-    expect(response.agentCapabilities?.sessionCapabilities?.resume).toBeNull();
+    expect(response.agentCapabilities?.loadSession).toBe(true);
+    expect(response.agentCapabilities?.sessionCapabilities?.list).toEqual({});
+    expect(response.agentCapabilities?.sessionCapabilities?.resume).toEqual({});
     expect(response.agentCapabilities?.sessionCapabilities?.close).toEqual({});
     expect(agent.getClientCapabilities()).toMatchObject({
       supportsReadTextFile: true,
@@ -176,12 +183,12 @@ describe("AcpAgent initialize", () => {
     );
   });
 
-  test("loadSession rejects until real persistence exists", async () => {
+  test("session lifecycle methods still require initialize before use", async () => {
     const agent = createTestAgent();
 
-    await expect(agent.loadSession({ sessionId: "session-1" } as any)).rejects.toThrow(
-      /loadSession is not supported yet/i,
-    );
+    await expect(
+      agent.loadSession({ sessionId: "session-1", cwd: "/tmp/project", mcpServers: [] } as any),
+    ).rejects.toThrow(/initialize\(\) must complete/i);
   });
 });
 

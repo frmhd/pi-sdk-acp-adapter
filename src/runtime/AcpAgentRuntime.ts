@@ -15,6 +15,7 @@ import type {
   ModelRegistry,
   AgentSession,
   CreateAgentSessionOptions,
+  SessionManager,
 } from "@mariozechner/pi-coding-agent";
 
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
@@ -132,6 +133,8 @@ export interface CreateAcpAgentRuntimeOptions {
   acpConnection: AgentSideConnection;
   /** Normalized client capabilities captured during initialize() */
   clientCapabilities: AcpClientCapabilitiesSnapshot;
+  /** Pi session manager backing this ACP session. */
+  sessionManager: SessionManager;
   /** Session ID for terminal requests (required for ACP protocol) */
   sessionId?: string;
   /** Default thinking level */
@@ -411,6 +414,7 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
     thinkingLevel: options.thinkingLevel || "medium",
     tools: [],
     customTools: tools,
+    sessionManager: options.sessionManager,
   };
 
   const { session } = await createAgentSession(sessionOptions);

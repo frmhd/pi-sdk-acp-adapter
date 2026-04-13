@@ -9,6 +9,7 @@ Legend:
 
 - [x] Start Phase 0
 - [x] Start Phase 2
+- [x] Start Phase 3
 
 ## Phase 0 — Correctness and Honesty
 
@@ -48,16 +49,16 @@ Legend:
 
 ## Phase 3 — Session Lifecycle
 
-- [ ] Back ACP sessions with Pi `SessionManager`
-- [ ] Replace ephemeral random ACP session IDs with Pi-backed stable session identity where possible
-- [ ] Implement real `loadSession`
-- [ ] Implement `listSessions`
-- [ ] Implement `unstable_resumeSession`
-- [ ] Implement `session_info_update` for title and `updatedAt`
-- [ ] Replay message history during `loadSession`
-- [ ] Ensure `closeSession` disposes and cleans up active work correctly
-- [ ] Add/update tests for new/list/load/resume/close flows
-- [ ] Verify Phase 3 with `vp check` and `vp test`
+- [x] Back ACP sessions with Pi `SessionManager`
+- [x] Replace ephemeral random ACP session IDs with Pi-backed stable session identity where possible
+- [x] Implement real `loadSession`
+- [x] Implement `listSessions`
+- [x] Implement `unstable_resumeSession`
+- [x] Implement `session_info_update` for title and `updatedAt`
+- [x] Replay message history during `loadSession`
+- [x] Ensure `closeSession` disposes and cleans up active work correctly
+- [x] Add/update tests for new/list/load/resume/close flows
+- [x] Verify Phase 3 with `vp check` and `vp test`
 
 ## Phase 4 — Polish and Compatibility
 
