@@ -495,7 +495,14 @@ export class AcpAgent implements Agent {
       params.sessionId,
     );
 
-    // Subscribe to Pi events and forward to ACP connection
+    // Subscribe to Pi events and forward to ACP connection.
+    // AgentSession listeners are synchronous, so we serialize ACP notifications
+    // ourselves to preserve start -> in_progress -> completed ordering.
+    let sessionUpdateQueue: Promise<void> = Promise.resolve();
+    const enqueueSessionUpdate = (work: () => Promise<void>) => {
+      sessionUpdateQueue = sessionUpdateQueue.then(work, work);
+    };
+
     const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
       const eventType = (event as { type?: string }).type;
       let toolCallState: AcpToolCallState | undefined;
@@ -543,31 +550,31 @@ export class AcpAgent implements Agent {
         }
       }
 
-      // Map Pi event to ACP notification and send
+      // Map Pi event to ACP notification and send.
       const notification = mapAgentEvent(params.sessionId, event, {
         cwd: sessionState.cwd,
         toolCallState,
       });
 
-      const notificationPromise = notification
-        ? this.connection.sessionUpdate(notification).catch((err) => {
-            console.error(`Failed to send session update for ${params.sessionId}:`, err);
-          })
-        : Promise.resolve();
-
-      if (completedToolCallId) {
-        const finishedToolCallId = completedToolCallId;
-        const finishedToolCallState = toolCallState;
+      const finishedToolCallId = completedToolCallId;
+      const finishedToolCallState = toolCallState;
+      if (finishedToolCallId) {
         sessionState.pendingToolCalls.delete(finishedToolCallId);
+      }
 
-        void (async () => {
-          try {
-            await notificationPromise;
-          } finally {
+      enqueueSessionUpdate(async () => {
+        try {
+          if (notification) {
+            await this.connection.sessionUpdate(notification);
+          }
+        } catch (err) {
+          console.error(`Failed to send session update for ${params.sessionId}:`, err);
+        } finally {
+          if (finishedToolCallState && finishedToolCallId) {
             await releaseToolCallResources(finishedToolCallState);
           }
-        })();
-      }
+        }
+      });
     });
 
     try {
@@ -594,6 +601,7 @@ export class AcpAgent implements Agent {
       throw error;
     } finally {
       unsubscribe();
+      await sessionUpdateQueue;
       await this.refreshSessionMetadata(sessionState).catch((error) => {
         console.warn(`Failed to refresh session metadata for ${params.sessionId}:`, error);
       });
