@@ -460,11 +460,23 @@ export function mapToolExecutionUpdate(
   const args = getToolArgs(event.args ?? context?.toolCallState?.rawInput);
   const toolName = getToolName(context, event.toolName);
 
+  const mutationDiffContent =
+    (toolName === "edit" || toolName === "write") && context?.toolCallState?.diff
+      ? [
+          createDiffContent(
+            context.toolCallState.diff.path,
+            context.toolCallState.diff.newText,
+            context.toolCallState.diff.oldText ?? undefined,
+          ),
+        ]
+      : undefined;
+
   const toolUpdate: ToolCallUpdate = {
     toolCallId: event.toolCallId,
     status: "in_progress",
     content:
       (toolName === "bash" ? mapTerminalToolContent(context) : undefined) ??
+      mutationDiffContent ??
       mapToolResultContent(event.partialResult),
     rawOutput: context?.toolCallState?.rawOutput ?? event.partialResult,
     title: toolName ? buildToolTitle(toolName, args, context) : undefined,

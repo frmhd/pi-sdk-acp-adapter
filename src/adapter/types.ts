@@ -54,7 +54,7 @@ export interface AcpBashTerminalRawOutput {
     command: string;
     timeout: number | null;
   };
-  /** The explicit ACP terminal command + args invocation. */
+  /** The ACP terminal request command + args sent to the client. */
   execution: {
     command: string;
     args: string[];

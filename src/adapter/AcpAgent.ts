@@ -11,6 +11,8 @@
  * - Handles session configuration (model selection, thinking level)
  */
 
+import { isAbsolute, resolve as resolvePath } from "node:path";
+
 import type { Agent, AgentSideConnection } from "@agentclientprotocol/sdk";
 
 import type {
@@ -64,9 +66,11 @@ import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
 import {
   getAvailableModels,
   getCurrentConfigOptions,
+  getModelOptionValue,
   handleSetSessionConfigOption,
   buildSetSessionConfigOptionResponse,
 } from "./AcpSessionConfig.js";
+import { assertPathAuthorized, getAuthorizedRoots } from "./AcpToolBridge.js";
 
 import type { CreateAcpAgentRuntimeOptions } from "../runtime/AcpAgentRuntime.js";
 import { ACP_AGENT_NAME, ACP_AGENT_TITLE, ADAPTER_VERSION } from "../packageMetadata.js";
@@ -116,6 +120,7 @@ function extractTextFromContent(blocks: ContentBlock[]): string {
 async function resolvePathsInText(
   text: string,
   cwd: string,
+  additionalDirectories: string[],
   connection: AgentSideConnection,
   sessionId: string,
 ): Promise<string> {
@@ -129,8 +134,10 @@ async function resolvePathsInText(
     const path = match[1] || match[2] || match[3];
 
     try {
-      // Resolve path relative to cwd if it's not absolute
-      const fullPath = path.startsWith("/") ? path : `${cwd}/${path}`;
+      // Resolve path relative to cwd if it's not absolute, then enforce the
+      // ACP session filesystem scope before reading it.
+      const fullPath = isAbsolute(path) ? path : resolvePath(cwd, path);
+      assertPathAuthorized(fullPath, getAuthorizedRoots(cwd, additionalDirectories), "read");
 
       const { content } = await connection.readTextFile({
         path: fullPath,
@@ -363,7 +370,7 @@ export class AcpAgent implements Agent {
     const sessionInfo = await this.findPersistedSessionInfo(params.sessionId, params.cwd);
     const sessionState = await this.createSessionState({
       cwd: params.cwd,
-      additionalDirectories: [],
+      additionalDirectories: params.additionalDirectories || [],
       sessionManager: SessionManager.open(
         sessionInfo.path,
         getAcpSessionDirectory(params.cwd, this.config.agentDir),
@@ -419,7 +426,7 @@ export class AcpAgent implements Agent {
     const sessionInfo = await this.findPersistedSessionInfo(params.sessionId, params.cwd);
     const sessionState = await this.createSessionState({
       cwd: params.cwd,
-      additionalDirectories: [],
+      additionalDirectories: params.additionalDirectories || [],
       sessionManager: SessionManager.open(
         sessionInfo.path,
         getAcpSessionDirectory(params.cwd, this.config.agentDir),
@@ -465,6 +472,7 @@ export class AcpAgent implements Agent {
     const userText = await resolvePathsInText(
       rawUserText,
       sessionState.cwd,
+      sessionState.additionalDirectories,
       this.connection,
       params.sessionId,
     );
@@ -749,7 +757,9 @@ export class AcpAgent implements Agent {
 
       sessionState.session = session;
       sessionState.dispose = dispose;
-      sessionState.currentModelId = session.state.model?.id;
+      sessionState.currentModelId = session.state.model
+        ? getModelOptionValue(session.state.model)
+        : undefined;
       sessionState.currentThinkingLevel = session.thinkingLevel;
       this.sessions.set(sessionId, sessionState);
       return sessionState;

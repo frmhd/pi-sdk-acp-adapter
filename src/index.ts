@@ -53,6 +53,7 @@ export {
 export {
   ALL_THINKING_LEVELS,
   getAvailableModels,
+  getModelOptionValue,
   createModelConfigOption,
   createThinkingConfigOption,
   getCurrentConfigOptions,

@@ -6,6 +6,8 @@
  * execution is delegated through ACP terminals.
  */
 
+import { resolve as resolvePath, sep } from "node:path";
+
 import type {
   ToolCallContent,
   ToolKind,
@@ -36,18 +38,18 @@ function escapeCmd(str: string): string {
   return `"${str.replace(/(["^%])/g, "^$1")}"`;
 }
 
-/** Build an ACP terminal request for Pi bash semantics using explicit command + args. */
+/**
+ * Build an ACP terminal request for a shell command string.
+ *
+ * ACP clients like Zed already execute terminal requests through the client's
+ * configured shell. Pre-wrapping the command in `sh -lc`/`cmd /c` makes the
+ * adapter depend on the agent host shell/platform instead of the client shell
+ * and breaks shell-managed async constructs like background jobs.
+ */
 export function createShellTerminalRequest(command: string): { command: string; args: string[] } {
-  if (process.platform === "win32") {
-    return {
-      command: "cmd.exe",
-      args: ["/d", "/s", "/c", command],
-    };
-  }
-
   return {
-    command: process.env.SHELL || "sh",
-    args: ["-lc", command],
+    command,
+    args: [],
   };
 }
 
@@ -57,6 +59,56 @@ function createMkdirTerminalRequest(dir: string): { command: string; args: strin
   }
 
   return createShellTerminalRequest(`mkdir -p ${escapeBash(dir)}`);
+}
+
+export interface AcpPathAuthorizationOptions {
+  /** Absolute workspace roots allowed for ACP filesystem operations. */
+  authorizedRoots?: string[];
+}
+
+function normalizeAuthorizedPath(path: string): string {
+  const normalized = resolvePath(path);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+export function getAuthorizedRoots(cwd: string, additionalDirectories: string[] = []): string[] {
+  return Array.from(
+    new Set(
+      [cwd, ...additionalDirectories]
+        .filter((path): path is string => typeof path === "string" && path.length > 0)
+        .map((path) => resolvePath(path)),
+    ),
+  );
+}
+
+function isPathWithinAuthorizedRoot(path: string, root: string): boolean {
+  if (path === root) {
+    return true;
+  }
+
+  const rootPrefix = root.endsWith(sep) ? root : `${root}${sep}`;
+  return path.startsWith(rootPrefix);
+}
+
+export function assertPathAuthorized(
+  path: string,
+  authorizedRoots: string[],
+  operation: "read" | "write" | "create directory",
+): void {
+  if (authorizedRoots.length === 0) {
+    return;
+  }
+
+  const normalizedPath = normalizeAuthorizedPath(path);
+  const normalizedRoots = authorizedRoots.map(normalizeAuthorizedPath);
+
+  if (normalizedRoots.some((root) => isPathWithinAuthorizedRoot(normalizedPath, root))) {
+    return;
+  }
+
+  throw new Error(
+    `ACP ${operation} denied for path ${JSON.stringify(path)}. Allowed workspace roots: ${authorizedRoots.join(", ")}. Filesystem access is limited to the session cwd and additionalDirectories.`,
+  );
 }
 
 // =============================================================================
@@ -123,6 +175,12 @@ interface TerminalPollResult {
   signal: string | null;
 }
 
+function hasTerminalExited(output: {
+  exitStatus?: { exitCode?: number | null; signal?: string | null } | null;
+}): boolean {
+  return output.exitStatus != null;
+}
+
 async function pollTerminalToCompletion(
   terminal: TerminalHandle,
   options?: { signal?: AbortSignal },
@@ -151,7 +209,10 @@ async function pollTerminalToCompletion(
         latestOutput = output.output;
         latestTruncated = output.truncated;
 
-        if (output.exitStatus !== undefined) {
+        // ACP clients report a running terminal as `exitStatus: null`.
+        // Only treat the terminal as completed when an actual exit-status
+        // object is present.
+        if (hasTerminalExited(output)) {
           resolved = true;
           resolve({
             output: latestOutput,
@@ -311,7 +372,7 @@ export class AcpTerminalOperations implements BashOperations {
           lastOutputLength = output.output.length;
         }
 
-        if (output.exitStatus !== undefined) {
+        if (hasTerminalExited(output)) {
           resolved = true;
           return;
         }
@@ -369,12 +430,15 @@ export class AcpTerminalOperations implements BashOperations {
 /** ACP Read Operations delegates file reads to the ACP client. */
 export class AcpReadOperations implements ReadOperations {
   private client: AcpClientInterface;
+  private authorizedRoots: string[];
 
-  constructor(client: AcpClientInterface) {
+  constructor(client: AcpClientInterface, options: AcpPathAuthorizationOptions = {}) {
     this.client = client;
+    this.authorizedRoots = options.authorizedRoots ?? [];
   }
 
   async readFile(absolutePath: string): Promise<Buffer> {
+    assertPathAuthorized(absolutePath, this.authorizedRoots, "read");
     if (!this.client.capabilities.supportsReadTextFile) {
       throw new Error("ACP client does not support fs/read_text_file.");
     }
@@ -398,12 +462,15 @@ export class AcpReadOperations implements ReadOperations {
 /** ACP Write Operations delegates file writes to the ACP client. */
 export class AcpWriteOperations implements WriteOperations {
   private client: AcpClientInterface;
+  private authorizedRoots: string[];
 
-  constructor(client: AcpClientInterface) {
+  constructor(client: AcpClientInterface, options: AcpPathAuthorizationOptions = {}) {
     this.client = client;
+    this.authorizedRoots = options.authorizedRoots ?? [];
   }
 
   async writeFile(absolutePath: string, content: string): Promise<void> {
+    assertPathAuthorized(absolutePath, this.authorizedRoots, "write");
     if (!this.client.capabilities.supportsWriteTextFile) {
       throw new Error("ACP client does not support fs/write_text_file.");
     }
@@ -416,6 +483,8 @@ export class AcpWriteOperations implements WriteOperations {
   }
 
   async mkdir(dir: string): Promise<void> {
+    assertPathAuthorized(dir, this.authorizedRoots, "create directory");
+
     if (!this.client.capabilities.supportsTerminal) {
       throw new Error("ACP client does not support terminal/create.");
     }
@@ -445,9 +514,9 @@ export class AcpEditOperations {
   private readOps: AcpReadOperations;
   private writeOps: AcpWriteOperations;
 
-  constructor(client: AcpClientInterface) {
-    this.readOps = new AcpReadOperations(client);
-    this.writeOps = new AcpWriteOperations(client);
+  constructor(client: AcpClientInterface, options: AcpPathAuthorizationOptions = {}) {
+    this.readOps = new AcpReadOperations(client, options);
+    this.writeOps = new AcpWriteOperations(client, options);
   }
 
   async readFile(path: string): Promise<string> {
@@ -478,13 +547,15 @@ export class AcpEditOperations {
 /** Lazily creates ACP-backed Pi tool operation bridges. */
 export class AcpToolBridge {
   private client: AcpClientInterface;
+  private authorization: AcpPathAuthorizationOptions;
   private terminalOps?: AcpTerminalOperations;
   private readOps?: AcpReadOperations;
   private writeOps?: AcpWriteOperations;
   private editOps?: AcpEditOperations;
 
-  constructor(client: AcpClientInterface) {
+  constructor(client: AcpClientInterface, authorization: AcpPathAuthorizationOptions = {}) {
     this.client = client;
+    this.authorization = authorization;
   }
 
   getBashOperations(): BashOperations | undefined {
@@ -496,21 +567,21 @@ export class AcpToolBridge {
 
   getReadOperations(): ReadOperations | undefined {
     if (!this.readOps) {
-      this.readOps = new AcpReadOperations(this.client);
+      this.readOps = new AcpReadOperations(this.client, this.authorization);
     }
     return this.readOps;
   }
 
   getWriteOperations(): WriteOperations | undefined {
     if (!this.writeOps) {
-      this.writeOps = new AcpWriteOperations(this.client);
+      this.writeOps = new AcpWriteOperations(this.client, this.authorization);
     }
     return this.writeOps;
   }
 
   getEditOperations(): AcpEditOperations | undefined {
     if (!this.editOps) {
-      this.editOps = new AcpEditOperations(this.client);
+      this.editOps = new AcpEditOperations(this.client, this.authorization);
     }
     return this.editOps;
   }

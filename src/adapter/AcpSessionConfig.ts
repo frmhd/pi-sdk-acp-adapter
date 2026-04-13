@@ -21,6 +21,8 @@ import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 
 import type { AcpSessionState } from "./types.js";
 
+type ModelOptionIdentity = Pick<Model<Api>, "id" | "provider">;
+
 // =============================================================================
 // Constants
 // =============================================================================
@@ -58,13 +60,39 @@ export function getAvailableModels(modelRegistry: ModelRegistry): Model<Api>[] {
 }
 
 /**
- * Convert model to ACP session config select option
+ * Serialize a model into the exact ACP config-option value string.
+ *
+ * Zed stores favorites for session config options by `value`, not by the
+ * display label. Using only `model.id` causes collisions when multiple
+ * providers expose the same model id/name. Encoding provider + id keeps each
+ * favorite scoped to a single provider/model pair while remaining a plain ACP
+ * string value.
+ */
+export function getModelOptionValue(model: ModelOptionIdentity): string {
+  return JSON.stringify({ provider: model.provider, id: model.id });
+}
+
+function parseModelOptionValue(value: string): ModelOptionIdentity | undefined {
+  try {
+    const parsed = JSON.parse(value) as { provider?: unknown; id?: unknown };
+    if (typeof parsed.provider === "string" && typeof parsed.id === "string") {
+      return { provider: parsed.provider, id: parsed.id };
+    }
+  } catch {
+    // Backwards compatibility: older config values used the raw model id.
+  }
+
+  return undefined;
+}
+
+/**
+ * Convert model to ACP session config select option.
  */
 function modelToOption(model: Model<Api>): SessionConfigSelectOption {
   return {
     name: `${model.name} (${model.provider})`,
     description: model.reasoning ? "Supports thinking/reasoning" : undefined,
-    value: model.id,
+    value: getModelOptionValue(model),
   };
 }
 
@@ -84,12 +112,14 @@ function thinkingLevelToOption(level: ThinkingLevel): SessionConfigSelectOption 
 
 /**
  * Create a model selection config option for ACP.
- * When currentModelId is undefined, currentValue is set to the first model's ID
- * so the client always has a valid selection (empty string would not match any option).
+ * When currentModelId is undefined, currentValue is set to the first model's
+ * serialized option value so the client always has a valid selection (empty
+ * string would not match any option).
  */
 export function createModelConfigOption(
   availableModels: Model<Api>[],
   currentModelId: string | undefined,
+  currentProvider?: string,
 ): SessionConfigOption {
   if (availableModels.length === 0) {
     // Return an empty/default option if no models are available
@@ -116,11 +146,12 @@ export function createModelConfigOption(
     modelsByProvider.set(model.provider, existing);
   }
 
-  // Determine currentValue: use provided ID or fall back to first model's ID
-  const currentValue =
-    currentModelId && availableModels.some((m) => m.id === currentModelId)
-      ? currentModelId
-      : availableModels[0]!.id;
+  // Determine currentValue using the exact ACP option value. This keeps the
+  // selected option aligned with what ACP clients persist/favorite.
+  const currentModel = currentModelId
+    ? findModelById(currentModelId, availableModels, currentProvider)
+    : undefined;
+  const currentValue = getModelOptionValue(currentModel ?? availableModels[0]!);
 
   // Create options - either grouped or flat based on provider count
   let options: SessionConfigSelectOptions;
@@ -194,7 +225,13 @@ export function getCurrentConfigOptions(
   const options: SessionConfigOption[] = [];
 
   // Add model config option
-  options.push(createModelConfigOption(availableModels, session.currentModelId));
+  options.push(
+    createModelConfigOption(
+      availableModels,
+      session.currentModelId,
+      session.session?.state.model?.provider,
+    ),
+  );
 
   // Add thinking level config option
   const currentThinkingLevel = session.currentThinkingLevel || "medium";
@@ -208,28 +245,37 @@ export function getCurrentConfigOptions(
 // =============================================================================
 
 /**
- * Find a model by ID from the available models.
- * If multiple providers have models with the same ID, uses the session's
- * current provider to disambiguate.
+ * Find a model from the available models.
+ *
+ * Supports both the current provider-qualified ACP config value and the older
+ * raw model-id format for backwards compatibility with previously persisted
+ * client settings.
  */
 export function findModelById(
   modelId: string,
   availableModels: Model<Api>[],
   currentProvider?: string,
 ): Model<Api> | undefined {
+  const optionIdentity = parseModelOptionValue(modelId);
+  if (optionIdentity) {
+    return availableModels.find(
+      (model) => model.id === optionIdentity.id && model.provider === optionIdentity.provider,
+    );
+  }
+
   const matches = availableModels.filter((m) => m.id === modelId);
 
   if (matches.length <= 1) {
     return matches[0];
   }
 
-  // Multiple matches — try to disambiguate using current provider
+  // Multiple matches — try to disambiguate using current provider.
   if (currentProvider) {
     const match = matches.find((m) => m.provider === currentProvider);
     if (match) return match;
   }
 
-  // Fall back to first match if provider disambiguation fails
+  // Fall back to first match if provider disambiguation fails.
   return matches[0];
 }
 
@@ -285,7 +331,7 @@ export async function handleSetSessionConfigOption(
 
       try {
         await session.session.setModel(model);
-        session.currentModelId = value;
+        session.currentModelId = getModelOptionValue(model);
         return { applied: true };
       } catch (err) {
         console.error(`Failed to set model ${value}:`, err);

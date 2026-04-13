@@ -34,6 +34,7 @@ import {
   AcpReadOperations,
   AcpWriteOperations,
   AcpTerminalOperations,
+  getAuthorizedRoots,
   type AcpClientInterface,
 } from "../adapter/AcpToolBridge.js";
 
@@ -232,11 +233,28 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
     options.clientCapabilities,
   );
 
-  const readOps: ReadOperations = new AcpReadOperations(acpClient);
-  const baseWriteOps: WriteOperations = new AcpWriteOperations(acpClient);
+  const authorizedRoots = getAuthorizedRoots(options.cwd, options.additionalDirectories ?? []);
+  const readOps: ReadOperations = new AcpReadOperations(acpClient, { authorizedRoots });
+  const baseWriteOps: WriteOperations = new AcpWriteOperations(acpClient, { authorizedRoots });
 
   const activeMutationToolCalls = new Map<string, string>();
+  const mutationToolProgressUpdates = new Map<string, () => void>();
   const editContents = new Map<string, string>();
+
+  const emitMutationToolProgressUpdate = (toolCallId: string | undefined) => {
+    if (!toolCallId) {
+      return;
+    }
+
+    const emit = mutationToolProgressUpdates.get(toolCallId);
+    if (!emit) {
+      return;
+    }
+
+    // Emit at most one in-progress update per mutation tool call.
+    mutationToolProgressUpdates.delete(toolCallId);
+    emit();
+  };
 
   const writeOps: WriteOperations = {
     writeFile: async (path: string, content: string) => {
@@ -256,6 +274,7 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
           path,
           diff: { path, oldText, newText: content },
         });
+        emitMutationToolProgressUpdate(toolCallId);
       }
 
       return baseWriteOps.writeFile(path, content);
@@ -279,6 +298,7 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
           path,
           diff: { path, oldText, newText: content },
         });
+        emitMutationToolProgressUpdate(toolCallId);
       }
 
       editContents.delete(path);
@@ -380,9 +400,24 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
         path: absolutePath,
       });
 
-      return trackMutationToolCall(activeMutationToolCalls, absolutePath, toolCallId, () =>
-        writeToolBase.execute(toolCallId, params, signal, onUpdate, ctx),
-      );
+      if (onUpdate) {
+        // Emit an immediate progress update so ACP clients can flip the tool
+        // card out of "pending" even before the write diff is available.
+        onUpdate({ content: [], details: undefined });
+        mutationToolProgressUpdates.set(toolCallId, () => {
+          onUpdate({ content: [], details: undefined });
+        });
+      } else {
+        mutationToolProgressUpdates.delete(toolCallId);
+      }
+
+      return trackMutationToolCall(activeMutationToolCalls, absolutePath, toolCallId, async () => {
+        try {
+          return await writeToolBase.execute(toolCallId, params, signal, onUpdate, ctx);
+        } finally {
+          mutationToolProgressUpdates.delete(toolCallId);
+        }
+      });
     },
   };
 
@@ -397,9 +432,24 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
         path: absolutePath,
       });
 
-      return trackMutationToolCall(activeMutationToolCalls, absolutePath, toolCallId, () =>
-        editToolBase.execute(toolCallId, params, signal, onUpdate, ctx),
-      );
+      if (onUpdate) {
+        // Emit an immediate progress update so ACP clients can flip the tool
+        // card out of "pending" even before the edit diff is available.
+        onUpdate({ content: [], details: undefined });
+        mutationToolProgressUpdates.set(toolCallId, () => {
+          onUpdate({ content: [], details: undefined });
+        });
+      } else {
+        mutationToolProgressUpdates.delete(toolCallId);
+      }
+
+      return trackMutationToolCall(activeMutationToolCalls, absolutePath, toolCallId, async () => {
+        try {
+          return await editToolBase.execute(toolCallId, params, signal, onUpdate, ctx);
+        } finally {
+          mutationToolProgressUpdates.delete(toolCallId);
+        }
+      });
     },
   };
 

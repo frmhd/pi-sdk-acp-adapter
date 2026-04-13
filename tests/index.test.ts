@@ -318,8 +318,8 @@ describe("Tool Execution Update Mapping", () => {
       terminalId: "term-123",
       input: { command: "echo hi", timeout: null },
       execution: {
-        command: "sh",
-        args: ["-lc", "echo hi"],
+        command: "echo hi",
+        args: [],
         cwd: "/workspace/project",
         outputByteLimit: 51200,
       },
@@ -536,8 +536,8 @@ describe("Tool Execution End Mapping", () => {
       terminalId: "term-123",
       input: { command: "echo hi", timeout: null },
       execution: {
-        command: "sh",
-        args: ["-lc", "echo hi"],
+        command: "echo hi",
+        args: [],
         cwd: "/workspace/project",
         outputByteLimit: 51200,
       },
@@ -615,8 +615,8 @@ describe("AcpAgent prompt tool state tracking", () => {
           terminalId: "term-1",
           input: { command: "echo hi", timeout: null },
           execution: {
-            command: "sh",
-            args: ["-lc", "echo hi"],
+            command: "echo hi",
+            args: [],
             cwd: "/tmp/project",
             outputByteLimit: 51200,
           },
@@ -638,8 +638,8 @@ describe("AcpAgent prompt tool state tracking", () => {
           terminalId: "term-1",
           input: { command: "echo hi", timeout: null },
           execution: {
-            command: "sh",
-            args: ["-lc", "echo hi"],
+            command: "echo hi",
+            args: [],
             cwd: "/tmp/project",
             outputByteLimit: 51200,
           },
