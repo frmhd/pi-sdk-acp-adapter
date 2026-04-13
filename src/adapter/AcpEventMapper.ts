@@ -24,6 +24,13 @@ import type { AssistantMessageEvent } from "@mariozechner/pi-ai";
 import { mapToolKind, mapStopReason, createToolCallContent, createDiffContent } from "./types.js";
 
 // =============================================================================
+// Meta Constants
+// =============================================================================
+
+/** Key for storing tool name in _meta (Zed compatibility) */
+const TOOL_NAME_META_KEY = "tool_name";
+
+// =============================================================================
 // Message Chunk Mapping
 // =============================================================================
 
@@ -127,6 +134,9 @@ export function mapToolExecutionStart(
     status: "pending",
     title,
     locations: locations.length > 0 ? locations : undefined,
+    _meta: {
+      [TOOL_NAME_META_KEY]: event.toolName,
+    },
   };
 
   return {

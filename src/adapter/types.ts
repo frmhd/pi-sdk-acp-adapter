@@ -144,6 +144,13 @@ export function mapStopReason(reason: string | undefined): StopReason {
 }
 
 // =============================================================================
+// Meta Constants
+// =============================================================================
+
+/** Key for storing tool name in _meta (Zed compatibility) */
+export const TOOL_NAME_META_KEY = "tool_name";
+
+// =============================================================================
 // Content Helpers
 // =============================================================================
 

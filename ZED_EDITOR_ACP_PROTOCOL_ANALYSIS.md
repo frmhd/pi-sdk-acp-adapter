@@ -621,9 +621,347 @@ pub fn create_subagent(&self, label: String, cx: &mut App) -> Result<Rc<dyn Suba
 
 ---
 
+## 12. UI Rendering: Tool Display Mapping (Critical for Agent Developers)
+
+This section describes how Zed renders different tools in the UI. This is critical for external ACP agent developers to ensure proper display of tool calls.
+
+### 12.1 Rendering Architecture: Three-Level Differentiation
+
+Zed determines tool UI appearance through three levels:
+
+1. **`ToolKind`** - Visual icon selection (8 variants)
+2. **`ToolCallContent` type** - Content rendering (Text, Diff, Terminal)
+3. **Special tool detection** - Subagent, file location handling
+
+**Main Rendering Dispatcher:**
+
+- **File:** `/home/frmhd/dev/github/zed/crates/agent_ui/src/conversation_view/thread_view.rs:6155-6205`
+
+```rust
+fn render_tool_call_wrapper(...) -> Div {
+    if tool_call.is_subagent() {
+        // SPECIAL: Subagent gets nested thread view
+        self.render_subagent_tool_call(...)
+    } else if tool_call.terminals().next().is_some() {
+        // SPECIAL: Terminal gets live output widget
+        self.render_terminal_tool_call(...)
+    } else {
+        // DEFAULT: Standard tool call rendering
+        self.render_tool_call(...)
+    }
+}
+```
+
+### 12.2 Level 1: ToolKind → Icon Mapping
+
+**Source:** `/home/frmhd/dev/github/zed/crates/agent_ui/src/conversation_view/thread_view.rs:7229-7239`
+
+| ToolKind     | Icon | IconName         | Usage                    |
+| ------------ | ---- | ---------------- | ------------------------ |
+| `Read`       | 🔍   | `ToolSearch`     | File reading, searching  |
+| `Edit`       | ✏️   | `ToolPencil`     | File modifications       |
+| `Delete`     | 🗑️   | `ToolDeleteFile` | File deletion            |
+| `Move`       | ↔️   | `ArrowRightLeft` | File movement            |
+| `Search`     | 🔍   | `ToolSearch`     | Grep, find operations    |
+| `Execute`    | 💻   | `ToolTerminal`   | Terminal commands        |
+| `Think`      | 💡   | `ToolThink`      | Reasoning/thinking steps |
+| `Fetch`      | 🌐   | `ToolWeb`        | Web requests, URLs       |
+| `SwitchMode` | ↔️   | `ArrowRightLeft` | Mode switching           |
+| `Other`      | 🔨   | `ToolHammer`     | Generic/MCP tools        |
+
+**Important:** The icon is selected purely by `ToolKind`, not by tool name. Tools with the same `ToolKind` share the same icon unless they have special content handling.
+
+```rust
+// Icon selection code
+Icon::new(match tool_call.kind {
+    acp::ToolKind::Read => IconName::ToolSearch,
+    acp::ToolKind::Edit => IconName::ToolPencil,
+    acp::ToolKind::Delete => IconName::ToolDeleteFile,
+    acp::ToolKind::Move => IconName::ArrowRightLeft,
+    acp::ToolKind::Search => IconName::ToolSearch,
+    acp::ToolKind::Execute => IconName::ToolTerminal,
+    acp::ToolKind::Think => IconName::ToolThink,
+    acp::ToolKind::Fetch => IconName::ToolWeb,
+    acp::ToolKind::SwitchMode => IconName::ArrowRightLeft,
+    acp::ToolKind::Other | _ => IconName::ToolHammer,
+})
+```
+
+### 12.3 Level 2: Content Type → Rendering Widget
+
+**Source:** `/home/frmhd/dev/github/zed/crates/agent_ui/src/conversation_view/thread_view.rs:7382-7426`
+
+Zed dispatch rendering based on `ToolCallContent` variant:
+
+```rust
+fn render_tool_call_content(...) -> AnyElement {
+    match content {
+        ToolCallContent::ContentBlock(content) => {
+            // Standard content: Markdown, text, or images
+            match content {
+                ResourceLink => render_resource_link(),
+                Markdown => render_markdown_output(),
+                Image => render_image_output(),
+            }
+        }
+        ToolCallContent::Diff(diff) => {
+            // DIFF EDITOR: Side-by-side code diff view
+            self.render_diff_editor(entry_ix, diff, tool_call, has_failed, cx)
+        }
+        ToolCallContent::Terminal(terminal) => {
+            // LIVE TERMINAL: Real-time terminal output
+            self.render_terminal_tool_call(...)
+        }
+    }
+}
+```
+
+#### ContentBlock Rendering (Default)
+
+**Source:** `/home/frmhd/dev/github/zed/crates/agent_ui/src/conversation_view/thread_view.rs:7397-7420`
+
+- **Markdown Text:** Syntax highlighted, clickable links
+- **Images:** Direct image display with proper sizing
+- **Resource Links:** Clickable file/URL references with icons
+
+**Example:** Standard tool output like `grep` results, `read_file` content
+
+#### Diff Rendering (ToolCallContent::Diff)
+
+**Source:** `/home/frmhd/dev/github/zed/crates/agent_ui/src/conversation_view/thread_view.rs:7430-7460` and `/home/frmhd/dev/github/zed/crates/agent_ui/src/conversation_view/thread_view.rs:7480-7550`
+
+When a tool returns `ToolCallContent::Diff`:
+
+- **Full diff editor** with syntax highlighting
+- **Side-by-side or inline** view modes
+- **Gutter decorations** showing insertions/deletions
+- **Clickable file navigation** (opens file at location)
+- **Loading state** while streaming diff
+
+**Visual styling:**
+
+- Top border separator
+- Failed edits: Dashed border warning
+- In-progress: Loading spinner
+
+**Required for:** `edit_file`, `streaming_edit_file`
+
+#### Terminal Rendering (ToolCallContent::Terminal)
+
+**Source:** `/home/frmhd/dev/github/zed/crates/agent_ui/src/conversation_view/thread_view.rs:5846-6100`
+
+When a tool returns `ToolCallContent::Terminal`:
+
+- **Live terminal output** with ANSI color support
+- **Collapsible command header** showing working directory
+- **Stop button** (red) while command running
+- **Truncation indicator** if output exceeds limits
+- **Time elapsed** display for long-running commands
+- **Exit status** indicator (success/failure)
+
+**Card layout features:**
+
+```rust
+.rounded_md()
+.border_1()
+.bg(cx.theme().colors().editor_background)
+.overflow_hidden()
+```
+
+**Required for:** `terminal` tool
+
+### 12.4 Level 3: Special Tool Handling
+
+#### Subagent Detection (spawn_agent)
+
+**Source:** `/home/frmhd/dev/github/zed/crates/agent_ui/src/conversation_view/thread_view.rs:6166-6190` and `/home/frmhd/dev/github/zed/crates/acp_thread/src/acp_thread.rs:435-450`
+
+Zed detects subagent tools via:
+
+1. `_meta["tool_name"] == "spawn_agent"` OR
+2. `_meta["subagent_session_info"]` exists
+
+**UI differences for subagent:**
+
+- **Agent icon** instead of tool icon: `Icon::new(self.agent_icon)`
+- **Nested thread view** showing complete subagent conversation
+- **Indentation** in the thread hierarchy
+- **Session ID linking** via `subagent_session_info`
+- **No backdrop blur** (simpler styling)
+
+**Detection code:**
+
+```rust
+pub fn is_subagent(&self) -> bool {
+    self.tool_name.as_ref().is_some_and(|s| s == "spawn_agent")
+        || self.subagent_session_info.is_some()
+}
+```
+
+#### File Location Handling
+
+**Source:** `/home/frmhd/dev/github/zed/crates/agent_ui/src/conversation_view/thread_view.rs:7188-7220`
+
+When `tool_call.locations.len() == 1`:
+
+- **File icon** extracted from path extension: `FileIcons::get_icon(path, cx)`
+- **Clickable header** navigates to file (Ctrl+Click)
+- **Tooltip:** "Go to File"
+- **Label:** Shows filename with path styling
+
+**Example:** `read_file`, `edit_file` with single location
+
+### 12.5 Layout Variants by Tool Category
+
+**Source:** `/home/frmhd/dev/github/zed/crates/agent_ui/src/conversation_view/thread_view.rs:6248-6280`
+
+| Category          | Condition                                          | Layout                    | Styling                             |
+| ----------------- | -------------------------------------------------- | ------------------------- | ----------------------------------- |
+| **Card Layout**   | `needs_confirmation \|\| is_edit \|\| is_terminal` | Bordered card with header | `rounded_md`, `border_1`, editor bg |
+| **Inline Layout** | Default                                            | Left border only          | `border_l_1`, panel bg              |
+| **Compact**       | File with location                                 | Minimal spacing           | `ml_4` margins                      |
+
+**Card layout code:**
+
+```rust
+let use_card_layout = needs_confirmation || is_edit || is_terminal_tool;
+
+if use_card_layout {
+    this.my_1p5()
+        .rounded_md()
+        .border_1()
+        .when(failed_or_canceled, |this| this.border_dashed())
+        .border_color(self.tool_card_border_color(cx))
+        .bg(cx.theme().colors().editor_background)
+        .overflow_hidden()
+} else {
+    // Inline: just left border
+    this.my_1().ml(rems(0.4)).px_3p5().border_l_1()
+}
+```
+
+### 12.6 Raw Input Display Rules
+
+**Source:** `/home/frmhd/dev/github/zed/crates/agent_ui/src/conversation_view/thread_view.rs:6260-6270`
+
+Raw input (JSON arguments) is shown as collapsible JSON, but **hidden** for:
+
+- Terminal tools (`is_terminal_tool`) - Command shown in header instead
+- Edit tools (`is_edit`) - Diff shown instead
+- Image tools (`has_image_content`) - Image shown instead
+
+```rust
+let should_show_raw_input = !is_terminal_tool && !is_edit && !has_image_content;
+```
+
+### 12.7 Status-Based Visual Effects
+
+**Source:** `/home/frmhd/dev/github/zed/crates/agent_ui/src/conversation_view/thread_view.rs:6218-6245`
+
+| Status                  | Visual Effect                                 |
+| ----------------------- | --------------------------------------------- |
+| **InProgress**          | Animated spinner: `.with_rotate_animation(2)` |
+| **Failed/Canceled**     | Dashed border + warning decoration            |
+| **WaitingConfirmation** | Expanded by default + permission buttons      |
+| **Completed**           | Collapsible disclosure (chevron)              |
+
+### 12.8 Complete Tool Mapping Reference
+
+| Tool Name                | ToolKind  | Content Type              | Icon       | Special UI                        |
+| ------------------------ | --------- | ------------------------- | ---------- | --------------------------------- |
+| `read_file`              | `Read`    | `ContentBlock` (Markdown) | Search     | File icon, clickable location     |
+| `edit_file`              | `Edit`    | `Diff`                    | Pencil     | Diff editor, card layout          |
+| `streaming_edit_file`    | `Edit`    | `Diff` (streaming)        | Pencil     | Live diff updates                 |
+| `terminal`               | `Execute` | `Terminal`                | Terminal   | Live terminal widget, stop button |
+| `spawn_agent`            | `Execute` | `ContentBlock`            | Agent\*    | Nested thread, subagent view      |
+| `fetch`                  | `Fetch`   | `ContentBlock`            | Web        | External link styling             |
+| `search_web`             | `Fetch`   | `ContentBlock`            | Web        | Search results                    |
+| `grep`                   | `Search`  | `ContentBlock`            | Search     | File result list                  |
+| `find_path`              | `Search`  | `ContentBlock`            | Search     | File results                      |
+| `list_directory`         | `Read`    | `ContentBlock`            | Search     | Directory tree                    |
+| `copy_path`              | `Execute` | `ContentBlock`            | Move       | Simple status                     |
+| `move_path`              | `Execute` | `ContentBlock`            | Move       | Path display                      |
+| `delete_path`            | `Execute` | `ContentBlock`            | DeleteFile | Warning styling                   |
+| `create_directory`       | `Execute` | `ContentBlock`            | Hammer     | Status message                    |
+| `save_file`              | `Execute` | `ContentBlock`            | Pencil     | File save confirmation            |
+| `diagnostics`            | `Read`    | `ContentBlock`            | Search     | Error/warning list                |
+| `now`                    | `Read`    | `ContentBlock`            | Hammer     | Simple text                       |
+| `open`                   | `Execute` | `ContentBlock`            | Terminal   | File opening status               |
+| `restore_file_from_disk` | `Execute` | `ContentBlock`            | Hammer     | Restore confirmation              |
+| `update_plan`            | `Execute` | `ContentBlock`            | Hammer     | Plan checklist                    |
+| MCP tools                | `Other`   | `ContentBlock`            | Hammer     | Generic rendering                 |
+
+\* Subagent uses agent icon via `is_subagent()` detection
+
+### 12.9 Best Practices for External Agents
+
+To ensure proper display in Zed:
+
+1. **Set `ToolKind` correctly:**
+   - Use `Edit` for file modifications (enables diff view)
+   - Use `Execute` for terminal commands (enables terminal widget)
+   - Use `Read` for file queries (enables file icon)
+   - Use `Fetch` for web requests
+
+2. **Include proper content:**
+   - Edit tools: Return `ToolCallContent::Diff` with `old_text`/`new_text`
+   - Terminal tools: Return `ToolCallContent::Terminal` with terminal_id
+   - Other tools: Return `ToolCallContent::Content` with markdown
+
+3. **Set `_meta["tool_name"]`:**
+   - Required for subagent detection (`"spawn_agent"`)
+   - Used for permission pattern matching
+
+4. **Set `locations` for file tools:**
+   - Enables file icon extraction
+   - Enables "Go to File" navigation
+   - Single location = file icon, multiple = generic
+
+5. **Stream updates properly:**
+   - Send `ToolCallUpdate` with incremental content
+   - Update `status` to `InProgress` → `Completed`/`Failed`
+
+### 12.10 Example: Proper Tool Call Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "type": "ToolCall",
+    "tool_call": {
+      "tool_call_id": "call_123",
+      "title": "Edit file `src/main.rs`",
+      "kind": "Edit",
+      "content": [
+        {
+          "type": "Diff",
+          "diff": {
+            "path": "/home/user/project/src/main.rs",
+            "old_text": "fn old() {}",
+            "new_text": "fn new() {}"
+          }
+        }
+      ],
+      "status": "Completed",
+      "locations": [{ "path": "/home/user/project/src/main.rs", "line": 42 }],
+      "raw_input": { "path": "src/main.rs", "changes": "..." },
+      "_meta": {
+        "tool_name": "edit_file"
+      }
+    }
+  }
+}
+```
+
+---
+
 ## References
 
 1. **Agent Client Protocol Crate:** https://crates.io/crates/agent-client-protocol (v0.10.2)
 2. **Zed ACP Implementation:** `/home/frmhd/dev/github/zed/crates/acp_thread/`
 3. **External Agent Support:** `/home/frmhd/dev/github/zed/crates/agent_servers/src/acp.rs`
 4. **Native Agent:** `/home/frmhd/dev/github/zed/crates/agent/src/agent.rs`
+5. **UI Rendering - Thread View:** `/home/frmhd/dev/github/zed/crates/agent_ui/src/conversation_view/thread_view.rs`
+6. **Tool Icons:** `/home/frmhd/dev/github/zed/crates/icons/src/icons.rs`
+7. **Tool Definitions:** `/home/frmhd/dev/github/zed/crates/agent/src/tools/`
