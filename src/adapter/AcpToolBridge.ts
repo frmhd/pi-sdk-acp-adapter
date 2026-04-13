@@ -351,7 +351,6 @@ export class AcpTerminalOperations implements BashOperations {
     });
     const releaseOnFinally = !this.hooks.onTerminalCreated;
 
-    let lastOutputLength = 0;
     let killed = false;
     let resolved = false;
 
@@ -366,12 +365,12 @@ export class AcpTerminalOperations implements BashOperations {
         const output = await terminal.currentOutput();
         this.hooks.onTerminalOutput?.({ output: output.output, truncated: output.truncated });
 
-        if (output.output.length > lastOutputLength) {
-          const newOutput = output.output.slice(lastOutputLength);
-          onData(Buffer.from(newOutput, "utf-8"));
-          lastOutputLength = output.output.length;
-        }
-
+        // Do not stream incremental terminal snapshots into Pi's bash tool.
+        // ACP terminal output is a snapshot, not an append-only stream, so it can
+        // shrink or otherwise change between polls. Feeding those snapshots into
+        // Pi incrementally causes stale/incorrect final tool results.
+        // Instead, we let the ACP client own the live terminal UI and only pass
+        // the final terminal output back into Pi once the command has finished.
         if (hasTerminalExited(output)) {
           resolved = true;
           return;
@@ -405,6 +404,11 @@ export class AcpTerminalOperations implements BashOperations {
     try {
       const result = await pollTerminalToCompletion(terminal, { signal });
       resolved = true;
+
+      if (result.output.length > 0) {
+        onData(Buffer.from(result.output, "utf-8"));
+      }
+
       this.hooks.onTerminalExit?.(result);
       return { exitCode: result.exitCode };
     } finally {

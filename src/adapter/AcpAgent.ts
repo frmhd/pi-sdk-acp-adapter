@@ -194,9 +194,27 @@ function mergeCapturedRawOutput(
     return nextValue;
   }
 
+  const rawOutputRecord = toolCallState.rawOutput as Record<string, unknown>;
+
+  // For bash commands, when the command ends, populate piPartialResult.content
+  // with the actual terminal output from rawOutput.output
+  if (phase === "end") {
+    const terminalOutput = typeof rawOutputRecord.output === "string" ? rawOutputRecord.output : "";
+    const piPartialResult = {
+      content: [{ type: "text", text: terminalOutput }],
+      details: {},
+    };
+
+    return {
+      ...rawOutputRecord,
+      piPartialResult,
+      piResult: nextValue,
+    };
+  }
+
   return {
-    ...(toolCallState.rawOutput as Record<string, unknown>),
-    [phase === "update" ? "piPartialResult" : "piResult"]: nextValue,
+    ...rawOutputRecord,
+    piPartialResult: nextValue,
   };
 }
 
