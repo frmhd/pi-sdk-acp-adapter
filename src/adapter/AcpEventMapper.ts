@@ -4,6 +4,9 @@
  * Maps Pi AgentSession events to ACP SessionNotification protocol messages.
  */
 
+import { homedir } from "node:os";
+import { isAbsolute, resolve as resolvePath } from "node:path";
+
 import type {
   SessionNotification,
   ToolCall,
@@ -13,6 +16,7 @@ import type {
   ContentChunk,
   StopReason,
   ToolCallStatus,
+  ContentBlock,
 } from "@agentclientprotocol/sdk";
 
 import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
@@ -21,7 +25,14 @@ import type { AgentEvent } from "@mariozechner/pi-agent-core";
 
 import type { AssistantMessageEvent } from "@mariozechner/pi-ai";
 
-import { mapToolKind, mapStopReason, createToolCallContent, createDiffContent } from "./types.js";
+import {
+  type AcpToolCallState,
+  mapToolKind,
+  mapStopReason,
+  createStructuredToolCallContent,
+  createToolCallContent,
+  createDiffContent,
+} from "./types.js";
 
 // =============================================================================
 // Meta Constants
@@ -29,6 +40,231 @@ import { mapToolKind, mapStopReason, createToolCallContent, createDiffContent } 
 
 /** Key for storing tool name in _meta (Zed compatibility) */
 const TOOL_NAME_META_KEY = "tool_name";
+
+/** Extra context available while mapping Pi tool events to ACP. */
+export interface ToolEventMappingContext {
+  /** Session working directory, used to normalize tool paths for ACP locations. */
+  cwd?: string;
+  /** Per-tool-call state captured by the adapter/runtime. */
+  toolCallState?: AcpToolCallState;
+}
+
+// =============================================================================
+// Path / Title Helpers
+// =============================================================================
+
+function expandToolPath(filePath: string): string {
+  if (filePath === "~") {
+    return homedir();
+  }
+
+  if (filePath.startsWith("~/")) {
+    return `${homedir()}${filePath.slice(1)}`;
+  }
+
+  return filePath.startsWith("@") ? filePath.slice(1) : filePath;
+}
+
+function resolveToolPath(filePath: string, cwd?: string): string {
+  const expanded = expandToolPath(filePath);
+  if (isAbsolute(expanded) || !cwd) {
+    return expanded;
+  }
+  return resolvePath(cwd, expanded);
+}
+
+function getToolArgs(args: unknown): Record<string, unknown> {
+  return typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
+}
+
+function getToolName(
+  context: ToolEventMappingContext | undefined,
+  fallback?: string,
+): string | undefined {
+  return context?.toolCallState?.toolName ?? fallback;
+}
+
+function getPathArg(args: Record<string, unknown>): string | undefined {
+  return typeof args.path === "string"
+    ? args.path
+    : typeof args.file_path === "string"
+      ? args.file_path
+      : undefined;
+}
+
+function getAbsoluteToolPath(
+  args: Record<string, unknown>,
+  context?: ToolEventMappingContext,
+): string | undefined {
+  const statePath = context?.toolCallState?.path;
+  if (typeof statePath === "string" && statePath.length > 0) {
+    return statePath;
+  }
+
+  const pathArg = getPathArg(args);
+  return pathArg ? resolveToolPath(pathArg, context?.cwd) : undefined;
+}
+
+function buildToolTitle(
+  toolName: string | undefined,
+  args: Record<string, unknown>,
+  context?: ToolEventMappingContext,
+): string {
+  const path = getAbsoluteToolPath(args, context);
+
+  switch (toolName) {
+    case "read":
+      return path ? `Read ${path}` : "Read file";
+    case "edit":
+      return path ? `Edit ${path}` : "Edit file";
+    case "write":
+      if (context?.toolCallState?.diff?.oldText === null) {
+        return path ? `Create ${path}` : "Create file";
+      }
+      return path ? `Write ${path}` : "Write file";
+    case "bash":
+      return typeof args.command === "string" ? `Run: ${args.command}` : "Run command";
+    default:
+      return toolName ?? "Tool";
+  }
+}
+
+function buildToolLocations(
+  toolName: string | undefined,
+  args: Record<string, unknown>,
+  context?: ToolEventMappingContext,
+): ToolCallLocation[] | undefined {
+  const path = getAbsoluteToolPath(args, context);
+  if (!path) {
+    return undefined;
+  }
+
+  const location: ToolCallLocation = { path };
+
+  if (toolName === "read" && typeof args.offset === "number") {
+    location.line = args.offset;
+  }
+
+  if ((toolName === "edit" || toolName === "write") && context?.toolCallState?.firstChangedLine) {
+    location.line = context.toolCallState.firstChangedLine;
+  }
+
+  return [location];
+}
+
+// =============================================================================
+// Tool Result Content Mapping
+// =============================================================================
+
+function mapPiContentBlockToAcp(block: unknown): ToolCallContent | undefined {
+  if (typeof block !== "object" || block === null) {
+    return undefined;
+  }
+
+  const content = block as Record<string, unknown>;
+
+  if (content.type === "text" && typeof content.text === "string") {
+    return createStructuredToolCallContent({
+      type: "text",
+      text: content.text,
+    } satisfies ContentBlock);
+  }
+
+  if (
+    content.type === "image" &&
+    typeof content.data === "string" &&
+    typeof content.mimeType === "string"
+  ) {
+    return createStructuredToolCallContent({
+      type: "image",
+      data: content.data,
+      mimeType: content.mimeType,
+    } satisfies ContentBlock);
+  }
+
+  return undefined;
+}
+
+function mapStructuredToolResultContent(result: unknown): ToolCallContent[] | undefined {
+  if (typeof result !== "object" || result === null) {
+    return undefined;
+  }
+
+  const content = (result as { content?: unknown }).content;
+  if (!Array.isArray(content) || content.length === 0) {
+    return undefined;
+  }
+
+  const mapped = content.map(mapPiContentBlockToAcp).filter(Boolean) as ToolCallContent[];
+  return mapped.length > 0 ? mapped : undefined;
+}
+
+function extractTextFromUnknown(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const textFields = ["stdout", "content", "output", "result", "message", "text", "data", "stderr"];
+
+  for (const field of textFields) {
+    if (typeof record[field] === "string") {
+      return record[field] as string;
+    }
+  }
+
+  for (const field of textFields) {
+    if (Array.isArray(record[field])) {
+      const parts: string[] = [];
+
+      for (const item of record[field] as unknown[]) {
+        if (typeof item === "string") {
+          parts.push(item);
+          continue;
+        }
+
+        if (typeof item === "object" && item !== null) {
+          const objectItem = item as Record<string, unknown>;
+          if (typeof objectItem.text === "string") {
+            parts.push(objectItem.text);
+          } else if (typeof objectItem.path === "string") {
+            parts.push(objectItem.path);
+          } else if (typeof objectItem.match === "string") {
+            parts.push(objectItem.match);
+          }
+        }
+      }
+
+      if (parts.length > 0) {
+        return parts.join("\n");
+      }
+    }
+  }
+
+  if (typeof record.exitCode === "number") {
+    return `Exit code: ${record.exitCode}`;
+  }
+
+  return undefined;
+}
+
+function mapToolResultContent(result: unknown): ToolCallContent[] | undefined {
+  const structuredContent = mapStructuredToolResultContent(result);
+  if (structuredContent && structuredContent.length > 0) {
+    return structuredContent;
+  }
+
+  const text = extractTextFromUnknown(result);
+  return text ? [createToolCallContent(text)] : undefined;
+}
+
+function buildToolMeta(toolName: string | undefined): Record<string, unknown> | undefined {
+  return toolName ? { [TOOL_NAME_META_KEY]: toolName } : undefined;
+}
 
 // =============================================================================
 // Message Chunk Mapping
@@ -70,58 +306,23 @@ export function mapMessageUpdate(
 
 /**
  * Convert tool execution start to an ACP ToolCall notification.
- *
- * Provides descriptive titles and file locations for transparency in the UI.
- * (Gemini CLI feature parity)
  */
 export function mapToolExecutionStart(
   sessionId: string,
   event: { toolCallId: string; toolName: string; args: unknown },
+  context?: ToolEventMappingContext,
 ): SessionNotification {
-  const args = (event.args as Record<string, unknown>) || {};
-  let title = event.toolName;
-  const locations: ToolCallLocation[] = [];
-
-  // Generate descriptive titles and locations based on tool and args
-  switch (event.toolName) {
-    case "bash":
-      if (typeof args.command === "string") {
-        title = `Running: ${args.command}`;
-      }
-      break;
-    case "read":
-    case "readFile":
-      if (typeof args.path === "string") {
-        title = `Reading: ${args.path}`;
-        locations.push({ path: args.path });
-      }
-      break;
-    case "write":
-    case "writeFile":
-      if (typeof args.path === "string") {
-        title = `Writing: ${args.path}`;
-        locations.push({ path: args.path });
-      }
-      break;
-    case "edit":
-    case "applyEdits":
-      if (typeof args.path === "string") {
-        title = `Editing: ${args.path}`;
-        locations.push({ path: args.path });
-      }
-      break;
-  }
+  const args = getToolArgs(event.args);
+  const toolName = getToolName(context, event.toolName) ?? event.toolName;
 
   const toolCall: ToolCall = {
     toolCallId: event.toolCallId,
-    rawInput: event.args,
-    kind: mapToolKind(event.toolName),
+    rawInput: context?.toolCallState?.rawInput ?? event.args,
+    kind: mapToolKind(toolName),
     status: "pending",
-    title,
-    locations: locations.length > 0 ? locations : undefined,
-    _meta: {
-      [TOOL_NAME_META_KEY]: event.toolName,
-    },
+    title: buildToolTitle(toolName, args, context),
+    locations: buildToolLocations(toolName, args, context),
+    _meta: buildToolMeta(toolName),
   };
 
   return {
@@ -134,46 +335,24 @@ export function mapToolExecutionStart(
 }
 
 /**
- * Convert partial result to text content
- */
-function extractTextFromPartialResult(partialResult: unknown): string | undefined {
-  if (typeof partialResult === "string") {
-    return partialResult;
-  }
-
-  if (typeof partialResult === "object" && partialResult !== null) {
-    const partial = partialResult as Record<string, unknown>;
-
-    // Handle string fields
-    const stringFields = ["output", "content", "stdout", "stderr", "result", "message"];
-    for (const field of stringFields) {
-      if (typeof partial[field] === "string") {
-        return partial[field] as string;
-      }
-    }
-
-    // Handle number fields (e.g., exit codes)
-    if (typeof partial.exitCode === "number") {
-      return String(partial.exitCode);
-    }
-  }
-
-  return undefined;
-}
-
-/**
- * Convert a tool execution update event to an ACP ToolCallUpdate notification
+ * Convert a tool execution update event to an ACP ToolCallUpdate notification.
  */
 export function mapToolExecutionUpdate(
   sessionId: string,
-  event: { toolCallId: string; partialResult: unknown },
+  event: { toolCallId: string; toolName?: string; args?: unknown; partialResult: unknown },
+  context?: ToolEventMappingContext,
 ): SessionNotification {
-  const text = extractTextFromPartialResult(event.partialResult);
+  const args = getToolArgs(event.args);
+  const toolName = getToolName(context, event.toolName);
 
   const toolUpdate: ToolCallUpdate = {
     toolCallId: event.toolCallId,
     status: "in_progress",
-    content: text ? [createToolCallContent(text)] : undefined,
+    content: mapToolResultContent(event.partialResult),
+    rawOutput: context?.toolCallState?.rawOutput ?? event.partialResult,
+    title: toolName ? buildToolTitle(toolName, args, context) : undefined,
+    locations: buildToolLocations(toolName, args, context),
+    _meta: buildToolMeta(toolName),
   };
 
   return {
@@ -186,98 +365,46 @@ export function mapToolExecutionUpdate(
 }
 
 /**
- * Extract text from tool result
- */
-function extractTextFromResult(result: unknown): string | undefined {
-  if (typeof result === "string") {
-    return result;
-  }
-
-  if (typeof result === "object" && result !== null) {
-    const r = result as Record<string, unknown>;
-
-    // Various possible result formats
-    const fields = ["stdout", "content", "output", "result", "message", "text", "data"];
-
-    for (const field of fields) {
-      if (typeof r[field] === "string") {
-        return r[field] as string;
-      }
-
-      // Handle array results (e.g., grep results)
-      if (Array.isArray(r[field])) {
-        const items = r[field] as unknown[];
-        const textParts: string[] = [];
-
-        for (const item of items) {
-          if (typeof item === "string") {
-            textParts.push(item);
-          } else if (typeof item === "object" && item !== null) {
-            // Try to extract text from object
-            const obj = item as Record<string, unknown>;
-            if (typeof obj.text === "string") {
-              textParts.push(obj.text);
-            } else if (typeof obj.path === "string") {
-              textParts.push(obj.path);
-            } else if (typeof obj.match === "string") {
-              textParts.push(obj.match);
-            } else {
-              textParts.push(JSON.stringify(item));
-            }
-          }
-        }
-
-        if (textParts.length > 0) {
-          return textParts.join("\n");
-        }
-      }
-    }
-
-    // Handle special fields
-    if (typeof r.path === "string" && "written" in r) {
-      return `Written to ${r.path}`;
-    }
-  }
-
-  return undefined;
-}
-
-/**
- * Convert a tool execution end event to an ACP ToolCallUpdate notification
+ * Convert a tool execution end event to an ACP ToolCallUpdate notification.
  */
 export function mapToolExecutionEnd(
   sessionId: string,
-  event: { toolCallId: string; result: unknown; isError: boolean },
-  lastEditDiff?: { path: string; oldText: string; newText: string },
+  event: {
+    toolCallId: string;
+    toolName?: string;
+    args?: unknown;
+    result: unknown;
+    isError: boolean;
+  },
+  context?: ToolEventMappingContext,
 ): SessionNotification {
-  const text = extractTextFromResult(event.result);
-  let toolStatus: ToolCallStatus = "completed";
+  const args = getToolArgs(event.args ?? context?.toolCallState?.rawInput);
+  const toolName = getToolName(context, event.toolName);
+  const toolStatus: ToolCallStatus = event.isError ? "failed" : "completed";
 
-  if (event.isError) {
-    toolStatus = "failed";
+  let content: ToolCallContent[] | undefined;
+
+  if (!event.isError && context?.toolCallState?.diff) {
+    const diff = context.toolCallState.diff;
+    content = [createDiffContent(diff.path, diff.newText, diff.oldText ?? undefined)];
+  } else {
+    content = mapToolResultContent(event.result);
   }
 
-  const content: ToolCallContent[] = [];
-
-  // Use diff content if available (Gemini CLI feature parity)
-  if (lastEditDiff) {
-    content.push(createDiffContent(lastEditDiff.path, lastEditDiff.newText, lastEditDiff.oldText));
-  } else if (text) {
-    content.push(createToolCallContent(text));
-  } else if (event.isError) {
-    // Create error message if no text content
-    const errorMsg =
-      typeof event.result === "string"
-        ? event.result
-        : (((event.result as Record<string, unknown>)?.message as string) ??
-          "Tool execution failed");
-    content.push(createToolCallContent(`Error: ${errorMsg}`));
+  if ((!content || content.length === 0) && event.isError) {
+    const errorMessage = extractTextFromUnknown(event.result) ?? "Tool execution failed";
+    content = [createToolCallContent(`Error: ${errorMessage}`)];
   }
 
   const toolUpdate: ToolCallUpdate = {
     toolCallId: event.toolCallId,
+    kind: toolName ? mapToolKind(toolName) : undefined,
     status: toolStatus,
-    content: content.length > 0 ? content : undefined,
+    content,
+    rawOutput: context?.toolCallState?.rawOutput ?? event.result,
+    title: toolName ? buildToolTitle(toolName, args, context) : undefined,
+    locations: buildToolLocations(toolName, args, context),
+    _meta: buildToolMeta(toolName),
   };
 
   return {
@@ -299,9 +426,8 @@ export function mapToolExecutionEnd(
 export function mapAgentEvent(
   sessionId: string,
   event: AgentSessionEvent,
-  lastEditDiff?: { path: string; oldText: string; newText: string },
+  context?: ToolEventMappingContext,
 ): SessionNotification | undefined {
-  // Handle AgentEvent types (from pi-agent-core)
   if ("type" in event) {
     const eventType = (event as { type: string }).type;
 
@@ -321,35 +447,37 @@ export function mapAgentEvent(
           toolName: string;
           args: unknown;
         };
-        return mapToolExecutionStart(sessionId, toolEvent);
+        return mapToolExecutionStart(sessionId, toolEvent, context);
       }
 
       case "tool_execution_update": {
         const toolEvent = event as {
           type: "tool_execution_update";
           toolCallId: string;
+          toolName?: string;
+          args?: unknown;
           partialResult: unknown;
         };
-        return mapToolExecutionUpdate(sessionId, toolEvent);
+        return mapToolExecutionUpdate(sessionId, toolEvent, context);
       }
 
       case "tool_execution_end": {
         const toolEvent = event as {
           type: "tool_execution_end";
           toolCallId: string;
+          toolName?: string;
+          args?: unknown;
           result: unknown;
           isError: boolean;
         };
-        return mapToolExecutionEnd(sessionId, toolEvent, lastEditDiff);
+        return mapToolExecutionEnd(sessionId, toolEvent, context);
       }
 
-      // These are informational, handled by prompt response stopReason
       case "agent_end":
       case "message_end":
       case "turn_end":
         return undefined;
 
-      // These don't map to visible session updates
       case "agent_start":
       case "turn_start":
       case "message_start":
@@ -357,8 +485,6 @@ export function mapAgentEvent(
     }
   }
 
-  // Handle extended AgentSessionEvent types (queue_update, compaction, etc.)
-  // These don't map to visible session updates
   return undefined;
 }
 
@@ -387,6 +513,7 @@ export function isFinalEvent(event: AgentSessionEvent): boolean {
 export {
   mapToolKind,
   mapStopReason,
+  createStructuredToolCallContent,
   createToolCallContent,
   createDiffContent,
   createTerminalContent,

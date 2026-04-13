@@ -36,7 +36,7 @@ import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 
-import type { AcpClientCapabilitiesSnapshot, AcpSessionState } from "./types.js";
+import type { AcpClientCapabilitiesSnapshot, AcpSessionState, AcpToolCallState } from "./types.js";
 
 import { mapAgentEvent, mapStopReason } from "./AcpEventMapper.js";
 
@@ -136,6 +136,29 @@ async function resolvePathsInText(
   }
 
   return resolvedText;
+}
+
+function getOrCreateToolCallState(
+  sessionState: AcpSessionState,
+  toolCallId: string,
+): AcpToolCallState {
+  const existing = sessionState.pendingToolCalls.get(toolCallId);
+  if (existing) {
+    return existing;
+  }
+
+  const created: AcpToolCallState = {};
+  sessionState.pendingToolCalls.set(toolCallId, created);
+  return created;
+}
+
+function extractFirstChangedLine(result: unknown): number | undefined {
+  if (typeof result !== "object" || result === null) {
+    return undefined;
+  }
+
+  const details = (result as { details?: { firstChangedLine?: unknown } }).details;
+  return typeof details?.firstChangedLine === "number" ? details.firstChangedLine : undefined;
 }
 
 // =============================================================================
@@ -265,6 +288,7 @@ export class AcpAgent implements Agent {
       additionalDirectories: params.additionalDirectories || [],
       currentModelId: undefined,
       currentThinkingLevel: this.config.defaultThinkingLevel || "medium",
+      pendingToolCalls: new Map(),
     };
 
     // Create Pi AgentSession
@@ -276,9 +300,8 @@ export class AcpAgent implements Agent {
       acpConnection: this.connection,
       clientCapabilities: this.clientCapabilities,
       sessionId,
-      // Gemini CLI feature parity: capture edits for diff support
-      onEditCaptured: (path, oldText, newText) => {
-        sessionState.lastEditDiff = { path, oldText, newText };
+      onToolCallStateCaptured: (toolCallId, update) => {
+        Object.assign(getOrCreateToolCallState(sessionState, toolCallId), update);
       },
     };
 
@@ -368,8 +391,53 @@ export class AcpAgent implements Agent {
 
     // Subscribe to Pi events and forward to ACP connection
     const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+      const eventType = (event as { type?: string }).type;
+      let toolCallState: AcpToolCallState | undefined;
+      let completedToolCallId: string | undefined;
+
+      if (eventType === "tool_execution_start") {
+        const toolEvent = event as {
+          toolCallId: string;
+          toolName: string;
+          args: unknown;
+        };
+        toolCallState = getOrCreateToolCallState(sessionState, toolEvent.toolCallId);
+        toolCallState.toolName = toolEvent.toolName;
+        toolCallState.rawInput = toolEvent.args;
+      } else if (eventType === "tool_execution_update") {
+        const toolEvent = event as {
+          toolCallId: string;
+          toolName?: string;
+          partialResult: unknown;
+        };
+        toolCallState = sessionState.pendingToolCalls.get(toolEvent.toolCallId);
+        if (toolCallState) {
+          toolCallState.toolName ??= toolEvent.toolName;
+          toolCallState.rawOutput = toolEvent.partialResult;
+        }
+      } else if (eventType === "tool_execution_end") {
+        const toolEvent = event as {
+          toolCallId: string;
+          toolName?: string;
+          result: unknown;
+        };
+        completedToolCallId = toolEvent.toolCallId;
+        toolCallState = sessionState.pendingToolCalls.get(toolEvent.toolCallId);
+        if (toolCallState) {
+          toolCallState.toolName ??= toolEvent.toolName;
+          toolCallState.rawOutput = toolEvent.result;
+          const firstChangedLine = extractFirstChangedLine(toolEvent.result);
+          if (firstChangedLine !== undefined) {
+            toolCallState.firstChangedLine = firstChangedLine;
+          }
+        }
+      }
+
       // Map Pi event to ACP notification and send
-      const notification = mapAgentEvent(params.sessionId, event, sessionState.lastEditDiff);
+      const notification = mapAgentEvent(params.sessionId, event, {
+        cwd: sessionState.cwd,
+        toolCallState,
+      });
 
       if (notification) {
         // Bug 7 fix: handle errors from sessionUpdate
@@ -378,9 +446,8 @@ export class AcpAgent implements Agent {
         });
       }
 
-      // Clear captured diff after it's been used in tool_execution_end
-      if ((event as { type?: string }).type === "tool_execution_end") {
-        sessionState.lastEditDiff = undefined;
+      if (completedToolCallId) {
+        sessionState.pendingToolCalls.delete(completedToolCallId);
       }
     });
 

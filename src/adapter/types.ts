@@ -35,6 +35,32 @@ import type { Model, Provider, AssistantMessageEvent } from "@mariozechner/pi-ai
 // Session State
 // =============================================================================
 
+/** ACP diff metadata captured for a single Pi tool call. */
+export interface AcpToolCallDiff {
+  /** Absolute file path targeted by the mutation. */
+  path: string;
+  /** Original file contents. Null when the file did not exist yet. */
+  oldText: string | null;
+  /** Final file contents after the mutation. */
+  newText: string;
+}
+
+/** Mutable adapter state captured for a single tool call. */
+export interface AcpToolCallState {
+  /** Pi tool name, e.g. read/write/edit/bash. */
+  toolName?: string;
+  /** Absolute file path when the tool targets a single file. */
+  path?: string;
+  /** File diff metadata for edit/write rendering. */
+  diff?: AcpToolCallDiff;
+  /** First changed line reported by Pi edit details. */
+  firstChangedLine?: number;
+  /** Raw ACP/Pi input captured at tool start. */
+  rawInput?: unknown;
+  /** Latest raw Pi output captured during updates/finalization. */
+  rawOutput?: unknown;
+}
+
 /** ACP session state */
 export interface AcpSessionState {
   /** Unique session identifier for ACP protocol */
@@ -51,12 +77,8 @@ export interface AcpSessionState {
   currentModelId?: string;
   /** Current thinking level in use */
   currentThinkingLevel?: ThinkingLevel;
-  /** Last captured edit diff for use in tool_execution_end */
-  lastEditDiff?: {
-    path: string;
-    oldText: string;
-    newText: string;
-  };
+  /** Per-tool-call ACP rendering state captured during execution. */
+  pendingToolCalls: Map<string, AcpToolCallState>;
 }
 
 // =============================================================================
@@ -149,14 +171,17 @@ export interface MappedNotification {
 // =============================================================================
 
 /**
- * Map Pi tool name to ACP ToolKind
- * Note: ACP's ToolKind doesn't include "write", so we map it to "other"
+ * Map Pi tool name to ACP ToolKind.
+ *
+ * `write` is intentionally mapped to `edit` so ACP clients like Zed render
+ * file creation/overwrite using the native diff UI instead of a generic tool card.
  */
 export function mapToolKind(toolName: string): ToolKind {
   switch (toolName) {
     case "read":
       return "read";
     case "edit":
+    case "write":
       return "edit";
     case "delete":
       return "delete";
@@ -164,7 +189,6 @@ export function mapToolKind(toolName: string): ToolKind {
       return "move";
     case "bash":
       return "execute";
-    case "write":
     default:
       return "other";
   }
@@ -212,15 +236,17 @@ export function createTextContent(text: string): ContentBlock {
   return { type: "text", text };
 }
 
-/** Create tool call content with text */
-export function createToolCallContent(text: string): ToolCallContent {
-  // ToolCallContent is (Content & { type: "content" }) | (Diff & { type: "diff" }) | (Terminal & { type: "terminal" })
-  // Content = { _meta?, content: ContentBlock }
-  // So we need: { type: "content", content: ContentBlock, _meta? }
+/** Create tool call content from an ACP content block. */
+export function createStructuredToolCallContent(content: ContentBlock): ToolCallContent {
   return {
     type: "content",
-    content: { type: "text", text },
+    content,
   } as ToolCallContent;
+}
+
+/** Create tool call content with text */
+export function createToolCallContent(text: string): ToolCallContent {
+  return createStructuredToolCallContent({ type: "text", text });
 }
 
 /** Create tool call content with diff */

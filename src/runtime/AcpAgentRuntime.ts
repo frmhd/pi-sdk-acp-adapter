@@ -6,6 +6,9 @@
  * via filesystem and terminal methods instead of local process access.
  */
 
+import { homedir } from "node:os";
+import { isAbsolute, resolve as resolvePath } from "node:path";
+
 import type { AgentSideConnection, EnvVariable, TerminalHandle } from "@agentclientprotocol/sdk";
 
 import type {
@@ -17,10 +20,10 @@ import type {
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 
 import {
-  createReadTool,
-  createWriteTool,
-  createEditTool,
-  createBashTool,
+  createReadToolDefinition,
+  createWriteToolDefinition,
+  createEditToolDefinition,
+  createBashToolDefinition,
   type ReadOperations,
   type WriteOperations,
   type EditOperations,
@@ -36,6 +39,7 @@ import {
 
 import {
   type AcpClientCapabilitiesSnapshot,
+  type AcpToolCallState,
   createMissingClientCapabilitiesMessage,
   getMissingRequiredClientCapabilities,
 } from "../adapter/types.js";
@@ -128,8 +132,44 @@ export interface CreateAcpAgentRuntimeOptions {
   sessionId?: string;
   /** Default thinking level */
   thinkingLevel?: ThinkingLevel;
-  /** Callback for capturing edits for diff support */
-  onEditCaptured?: (path: string, oldText: string, newText: string) => void;
+  /** Callback for capturing per-tool-call ACP rendering state. */
+  onToolCallStateCaptured?: (toolCallId: string, update: Partial<AcpToolCallState>) => void;
+}
+
+// =============================================================================
+// Path Helpers
+// =============================================================================
+
+function expandToolPath(filePath: string): string {
+  if (filePath === "~") {
+    return homedir();
+  }
+
+  if (filePath.startsWith("~/")) {
+    return `${homedir()}${filePath.slice(1)}`;
+  }
+
+  return filePath.startsWith("@") ? filePath.slice(1) : filePath;
+}
+
+function resolveToolPath(filePath: string, cwd: string): string {
+  const expanded = expandToolPath(filePath);
+  return isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
+}
+
+function trackMutationToolCall<T>(
+  activeMutationToolCalls: Map<string, string>,
+  absolutePath: string,
+  toolCallId: string,
+  execute: () => Promise<T>,
+): Promise<T> {
+  activeMutationToolCalls.set(absolutePath, toolCallId);
+
+  return execute().finally(() => {
+    if (activeMutationToolCalls.get(absolutePath) === toolCallId) {
+      activeMutationToolCalls.delete(absolutePath);
+    }
+  });
 }
 
 // =============================================================================
@@ -157,9 +197,35 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
   );
 
   const readOps: ReadOperations = new AcpReadOperations(acpClient);
-  const writeOps: WriteOperations = new AcpWriteOperations(acpClient);
+  const baseWriteOps: WriteOperations = new AcpWriteOperations(acpClient);
 
+  const activeMutationToolCalls = new Map<string, string>();
   const editContents = new Map<string, string>();
+
+  const writeOps: WriteOperations = {
+    writeFile: async (path: string, content: string) => {
+      const toolCallId = activeMutationToolCalls.get(path);
+      let oldText: string | null = null;
+
+      try {
+        const existing = await readOps.readFile(path);
+        oldText = existing.toString("utf-8");
+      } catch {
+        oldText = null;
+      }
+
+      if (toolCallId) {
+        options.onToolCallStateCaptured?.(toolCallId, {
+          toolName: "write",
+          path,
+          diff: { path, oldText, newText: content },
+        });
+      }
+
+      return baseWriteOps.writeFile(path, content);
+    },
+    mkdir: async (dir: string) => baseWriteOps.mkdir(dir),
+  };
 
   const editOps: EditOperations = {
     readFile: async (path: string) => {
@@ -169,23 +235,64 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
     },
     writeFile: async (path: string, content: string) => {
       const oldText = editContents.get(path);
-      if (oldText !== undefined && options.onEditCaptured) {
-        options.onEditCaptured(path, oldText, content);
+      const toolCallId = activeMutationToolCalls.get(path);
+
+      if (oldText !== undefined && toolCallId) {
+        options.onToolCallStateCaptured?.(toolCallId, {
+          toolName: "edit",
+          path,
+          diff: { path, oldText, newText: content },
+        });
       }
+
       editContents.delete(path);
-      return writeOps.writeFile(path, content);
+      return baseWriteOps.writeFile(path, content);
     },
     access: async (path: string) => readOps.access(path),
   };
 
   const bashOps: BashOperations = new AcpTerminalOperations(acpClient);
 
-  const tools = [
-    createReadTool(options.cwd, { operations: readOps }),
-    createWriteTool(options.cwd, { operations: writeOps }),
-    createEditTool(options.cwd, { operations: editOps }),
-    createBashTool(options.cwd, { operations: bashOps }),
-  ];
+  const readTool = createReadToolDefinition(options.cwd, { operations: readOps });
+  const bashTool = createBashToolDefinition(options.cwd, { operations: bashOps });
+
+  const writeToolBase = createWriteToolDefinition(options.cwd, { operations: writeOps });
+  const writeTool: typeof writeToolBase = {
+    ...writeToolBase,
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const absolutePath = resolveToolPath(params.path, options.cwd);
+
+      options.onToolCallStateCaptured?.(toolCallId, {
+        toolName: "write",
+        path: absolutePath,
+      });
+
+      return trackMutationToolCall(activeMutationToolCalls, absolutePath, toolCallId, () =>
+        writeToolBase.execute(toolCallId, params, signal, onUpdate, ctx),
+      );
+    },
+  };
+
+  const editToolBase = createEditToolDefinition(options.cwd, { operations: editOps });
+  const editTool: typeof editToolBase = {
+    ...editToolBase,
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const absolutePath = resolveToolPath(params.path, options.cwd);
+
+      options.onToolCallStateCaptured?.(toolCallId, {
+        toolName: "edit",
+        path: absolutePath,
+      });
+
+      return trackMutationToolCall(activeMutationToolCalls, absolutePath, toolCallId, () =>
+        editToolBase.execute(toolCallId, params, signal, onUpdate, ctx),
+      );
+    },
+  };
+
+  const tools = [readTool, writeTool, editTool, bashTool] as unknown as NonNullable<
+    CreateAgentSessionOptions["customTools"]
+  >;
 
   const sessionOptions: CreateAgentSessionOptions = {
     cwd: options.cwd,

@@ -8,6 +8,8 @@
 // Re-export types
 export type {
   AcpSessionState,
+  AcpToolCallState,
+  AcpToolCallDiff,
   AcpClientCapabilitiesSnapshot,
   ModelInfo,
   SessionConfigOptions,
@@ -70,6 +72,7 @@ export {
   isFinalEvent,
   mapToolKind,
   mapStopReason,
+  createStructuredToolCallContent,
   createToolCallContent,
 } from "./adapter/AcpEventMapper.js";
 

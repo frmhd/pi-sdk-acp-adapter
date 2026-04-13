@@ -22,16 +22,16 @@ Legend:
 
 ## Phase 1 — Zed Tool UI Alignment
 
-- [ ] Introduce per-tool-call state instead of session-global `lastEditDiff`
-- [ ] Map `write` to ACP `edit` semantics for Zed rendering purposes
-- [ ] Emit ACP diff content for `edit`
-- [ ] Emit ACP diff/add content for `write`
-- [ ] Preserve file locations for all file-targeting tool calls
-- [ ] Improve tool titles for `read`, `write`, `edit`, `bash`
-- [ ] Preserve structured Pi tool content instead of collapsing everything to plain text
-- [ ] Populate `rawInput` / `rawOutput` more consistently
-- [ ] Add/update tests for tool call payload shapes
-- [ ] Verify Phase 1 with `vp check` and `vp test`
+- [x] Introduce per-tool-call state instead of session-global `lastEditDiff`
+- [x] Map `write` to ACP `edit` semantics for Zed rendering purposes
+- [x] Emit ACP diff content for `edit`
+- [x] Emit ACP diff/add content for `write`
+- [x] Preserve file locations for all file-targeting tool calls
+- [x] Improve tool titles for `read`, `write`, `edit`, `bash`
+- [x] Preserve structured Pi tool content instead of collapsing everything to plain text
+- [x] Populate `rawInput` / `rawOutput` more consistently
+- [x] Add/update tests for tool call payload shapes
+- [x] Verify Phase 1 with `vp check` and `vp test`
 
 ## Phase 2 — Terminal Integration
 

@@ -30,13 +30,21 @@ function createMockSession() {
   } as any;
 }
 
+function createMockConnection() {
+  return {
+    sessionUpdate: vi.fn(async () => undefined),
+    readTextFile: vi.fn(async () => ({ content: "" })),
+  } as any;
+}
+
 function createTestAgent(
+  connection: any = createMockConnection(),
   createRuntime:
     | ((options: any) => Promise<{ session: any; dispose: () => void }>)
     | undefined = undefined,
 ) {
   return new AcpAgent(
-    {} as any,
+    connection,
     {
       modelRegistry: {
         getAvailable: () => [],
@@ -69,6 +77,10 @@ describe("Type Definitions", () => {
     expect(mapToolKind("edit")).toBe("edit");
   });
 
+  test("mapToolKind maps write to edit for Zed diff rendering", () => {
+    expect(mapToolKind("write")).toBe("edit");
+  });
+
   test("mapToolKind maps bash to execute", () => {
     expect(mapToolKind("bash")).toBe("execute");
   });
@@ -77,10 +89,6 @@ describe("Type Definitions", () => {
     expect(mapToolKind("grep")).toBe("other");
     expect(mapToolKind("find")).toBe("other");
     expect(mapToolKind("ls")).toBe("other");
-  });
-
-  test("mapToolKind maps write to other", () => {
-    expect(mapToolKind("write")).toBe("other");
   });
 
   test("mapToolKind maps unknown to other", () => {
@@ -142,7 +150,7 @@ describe("AcpAgent initialize", () => {
       session: createMockSession(),
       dispose: vi.fn(),
     }));
-    const agent = createTestAgent(createRuntime);
+    const agent = createTestAgent(createMockConnection(), createRuntime);
 
     await agent.initialize({
       protocolVersion: 1,
@@ -220,107 +228,346 @@ describe("createToolCallContent", () => {
 });
 
 describe("Tool Execution Start Mapping", () => {
-  test("maps tool execution start to tool_call notification", () => {
-    const notification = mapToolExecutionStart("session-123", {
-      toolCallId: "tool-1",
-      toolName: "read",
-      args: { path: "/test/file.ts" },
-    });
+  test("maps read to a file-targeting tool call with title, location, and _meta", () => {
+    const notification = mapToolExecutionStart(
+      "session-123",
+      {
+        toolCallId: "tool-1",
+        toolName: "read",
+        args: { path: "/test/file.ts" },
+      },
+      { cwd: "/workspace" },
+    );
 
     expect(notification.sessionId).toBe("session-123");
     expect(notification.update.sessionUpdate).toBe("tool_call");
     expect((notification.update as any).toolCallId).toBe("tool-1");
-    expect((notification.update as any).title).toBe("Reading: /test/file.ts");
+    expect((notification.update as any).title).toBe("Read /test/file.ts");
     expect((notification.update as any).locations).toEqual([{ path: "/test/file.ts" }]);
     expect((notification.update as any).kind).toBe("read");
     expect((notification.update as any).status).toBe("pending");
+    expect((notification.update as any)._meta).toEqual({ tool_name: "read" });
   });
 
-  test("maps bash tool to execute kind", () => {
+  test("maps bash tool to execute kind with clean run title", () => {
     const notification = mapToolExecutionStart("session-123", {
       toolCallId: "tool-2",
       toolName: "bash",
       args: { command: "ls -la" },
     });
 
-    expect((notification.update as any).title).toBe("Running: ls -la");
+    expect((notification.update as any).title).toBe("Run: ls -la");
     expect((notification.update as any).kind).toBe("execute");
+  });
+
+  test("maps write to edit kind and preserves an absolute file location", () => {
+    const notification = mapToolExecutionStart(
+      "session-123",
+      {
+        toolCallId: "tool-3",
+        toolName: "write",
+        args: { path: "src/new.ts", content: "hello" },
+      },
+      { cwd: "/workspace/project" },
+    );
+
+    expect((notification.update as any).title).toBe("Write /workspace/project/src/new.ts");
+    expect((notification.update as any).kind).toBe("edit");
+    expect((notification.update as any).locations).toEqual([
+      { path: "/workspace/project/src/new.ts" },
+    ]);
   });
 });
 
 describe("Tool Execution Update Mapping", () => {
-  test("maps string partial result to text content", () => {
+  test("preserves structured partial Pi content and raw output", () => {
+    const partialResult = {
+      content: [{ type: "text", text: "Partial output..." }],
+      details: { truncated: false },
+    };
+
     const notification = mapToolExecutionUpdate("session-123", {
       toolCallId: "tool-1",
-      partialResult: "Partial output...",
+      toolName: "bash",
+      partialResult,
     });
 
     expect(notification.sessionId).toBe("session-123");
     expect(notification.update.sessionUpdate).toBe("tool_call_update");
     expect((notification.update as any).toolCallId).toBe("tool-1");
     expect((notification.update as any).status).toBe("in_progress");
+    expect((notification.update as any).content).toEqual([
+      {
+        type: "content",
+        content: { type: "text", text: "Partial output..." },
+      },
+    ]);
+    expect((notification.update as any).rawOutput).toEqual(partialResult);
   });
 
-  test("maps object partial result with stdout", () => {
-    const notification = mapToolExecutionUpdate("session-123", {
-      toolCallId: "tool-1",
-      partialResult: { stdout: "Command output" },
-    });
-
-    expect(notification.update).toBeDefined();
-  });
-
-  test("returns undefined content when no text", () => {
+  test("keeps notification shape when partial output has no visible content", () => {
     const notification = mapToolExecutionUpdate("session-123", {
       toolCallId: "tool-1",
       partialResult: null,
     });
 
     expect(notification).toBeDefined();
+    expect((notification.update as any).status).toBe("in_progress");
   });
 });
 
 describe("Tool Execution End Mapping", () => {
-  test("maps successful result to completed status", () => {
-    const notification = mapToolExecutionEnd("session-123", {
-      toolCallId: "tool-1",
-      result: { stdout: "Success output" },
-      isError: false,
-    });
+  test("maps write completion to ACP diff content with create semantics", () => {
+    const result = {
+      content: [{ type: "text", text: "Successfully wrote 5 bytes to src/new.ts" }],
+      details: undefined,
+    };
+
+    const notification = mapToolExecutionEnd(
+      "session-123",
+      {
+        toolCallId: "tool-1",
+        toolName: "write",
+        result,
+        isError: false,
+      },
+      {
+        cwd: "/workspace/project",
+        toolCallState: {
+          toolName: "write",
+          path: "/workspace/project/src/new.ts",
+          diff: {
+            path: "/workspace/project/src/new.ts",
+            oldText: null,
+            newText: "hello",
+          },
+          rawOutput: result,
+        },
+      },
+    );
 
     expect(notification.sessionId).toBe("session-123");
     expect(notification.update.sessionUpdate).toBe("tool_call_update");
     expect((notification.update as any).toolCallId).toBe("tool-1");
     expect((notification.update as any).status).toBe("completed");
+    expect((notification.update as any).kind).toBe("edit");
+    expect((notification.update as any).title).toBe("Create /workspace/project/src/new.ts");
+    expect((notification.update as any).locations).toEqual([
+      { path: "/workspace/project/src/new.ts" },
+    ]);
+    expect((notification.update as any).content).toEqual([
+      {
+        type: "diff",
+        path: "/workspace/project/src/new.ts",
+        oldText: null,
+        newText: "hello",
+        _meta: { kind: "add" },
+      },
+    ]);
+    expect((notification.update as any).rawOutput).toEqual(result);
+  });
+
+  test("adds firstChangedLine to edit locations", () => {
+    const result = {
+      content: [{ type: "text", text: "Successfully replaced 1 block(s) in src/file.ts." }],
+      details: { firstChangedLine: 7 },
+    };
+
+    const notification = mapToolExecutionEnd(
+      "session-123",
+      {
+        toolCallId: "tool-2",
+        toolName: "edit",
+        result,
+        isError: false,
+      },
+      {
+        cwd: "/workspace/project",
+        toolCallState: {
+          toolName: "edit",
+          path: "/workspace/project/src/file.ts",
+          diff: {
+            path: "/workspace/project/src/file.ts",
+            oldText: "before",
+            newText: "after",
+          },
+          firstChangedLine: 7,
+        },
+      },
+    );
+
+    expect((notification.update as any).title).toBe("Edit /workspace/project/src/file.ts");
+    expect((notification.update as any).locations).toEqual([
+      { path: "/workspace/project/src/file.ts", line: 7 },
+    ]);
+  });
+
+  test("preserves structured Pi read content instead of collapsing to plain text", () => {
+    const result = {
+      content: [
+        { type: "text", text: "Read image file [image/png]" },
+        { type: "image", data: "abc123", mimeType: "image/png" },
+      ],
+      details: { truncation: undefined },
+    };
+
+    const notification = mapToolExecutionEnd("session-123", {
+      toolCallId: "tool-3",
+      toolName: "read",
+      result,
+      isError: false,
+    });
+
+    expect((notification.update as any).content).toEqual([
+      {
+        type: "content",
+        content: { type: "text", text: "Read image file [image/png]" },
+      },
+      {
+        type: "content",
+        content: { type: "image", data: "abc123", mimeType: "image/png" },
+      },
+    ]);
+    expect((notification.update as any).rawOutput).toEqual(result);
   });
 
   test("maps error result to failed status", () => {
     const notification = mapToolExecutionEnd("session-123", {
-      toolCallId: "tool-1",
+      toolCallId: "tool-4",
       result: "File not found",
       isError: true,
     });
 
     expect((notification.update as any).status).toBe("failed");
   });
+});
 
-  test("creates error message when isError and no content", () => {
-    const notification = mapToolExecutionEnd("session-123", {
-      toolCallId: "tool-1",
-      result: { message: "Permission denied" },
-      isError: true,
+describe("AcpAgent prompt tool state tracking", () => {
+  test("keeps per-tool-call diffs isolated across overlapping tool executions", async () => {
+    const connection = createMockConnection();
+    const mockSession = createMockSession();
+    let onEvent: ((event: any) => void) | undefined;
+    let runtimeOptions: any;
+
+    mockSession.subscribe = vi.fn((callback: (event: any) => void) => {
+      onEvent = callback;
+      return () => {};
     });
 
-    expect(notification.update).toBeDefined();
-  });
+    mockSession.prompt = vi.fn(async () => {
+      onEvent?.({
+        type: "tool_execution_start",
+        toolCallId: "tool-1",
+        toolName: "edit",
+        args: { path: "a.ts", edits: [{ oldText: "old-a", newText: "new-a" }] },
+      });
+      runtimeOptions.onToolCallStateCaptured("tool-1", {
+        toolName: "edit",
+        path: "/tmp/project/a.ts",
+        diff: {
+          path: "/tmp/project/a.ts",
+          oldText: "old-a",
+          newText: "new-a",
+        },
+      });
 
-  test("maps bash result with stdout", () => {
-    const notification = mapToolExecutionEnd("session-123", {
-      toolCallId: "tool-1",
-      result: { stdout: "ls output", exitCode: 0 },
-      isError: false,
+      onEvent?.({
+        type: "tool_execution_start",
+        toolCallId: "tool-2",
+        toolName: "edit",
+        args: { path: "b.ts", edits: [{ oldText: "old-b", newText: "new-b" }] },
+      });
+      runtimeOptions.onToolCallStateCaptured("tool-2", {
+        toolName: "edit",
+        path: "/tmp/project/b.ts",
+        diff: {
+          path: "/tmp/project/b.ts",
+          oldText: "old-b",
+          newText: "new-b",
+        },
+      });
+
+      onEvent?.({
+        type: "tool_execution_end",
+        toolCallId: "tool-1",
+        toolName: "edit",
+        result: {
+          content: [{ type: "text", text: "done a" }],
+          details: { firstChangedLine: 4 },
+        },
+        isError: false,
+      });
+
+      onEvent?.({
+        type: "tool_execution_end",
+        toolCallId: "tool-2",
+        toolName: "edit",
+        result: {
+          content: [{ type: "text", text: "done b" }],
+          details: { firstChangedLine: 9 },
+        },
+        isError: false,
+      });
     });
 
-    expect(notification.update).toBeDefined();
+    const createRuntime = vi.fn(async (options: any) => {
+      runtimeOptions = options;
+      return {
+        session: mockSession,
+        dispose: vi.fn(),
+      };
+    });
+
+    const agent = createTestAgent(connection, createRuntime);
+
+    await agent.initialize({
+      protocolVersion: 1,
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: true,
+      },
+    });
+
+    const { sessionId } = await agent.newSession({ cwd: "/tmp/project" } as any);
+
+    await agent.prompt({
+      sessionId,
+      prompt: [{ type: "text", text: "Apply both edits" }],
+    } as any);
+
+    const updates = connection.sessionUpdate.mock.calls.map(
+      ([notification]: [any]) => notification.update,
+    );
+
+    const tool1End = updates.find(
+      (update: any) =>
+        update.sessionUpdate === "tool_call_update" &&
+        update.toolCallId === "tool-1" &&
+        update.status === "completed",
+    );
+    const tool2End = updates.find(
+      (update: any) =>
+        update.sessionUpdate === "tool_call_update" &&
+        update.toolCallId === "tool-2" &&
+        update.status === "completed",
+    );
+
+    expect(tool1End.content[0]).toMatchObject({
+      type: "diff",
+      path: "/tmp/project/a.ts",
+      oldText: "old-a",
+      newText: "new-a",
+    });
+    expect(tool1End.locations).toEqual([{ path: "/tmp/project/a.ts", line: 4 }]);
+
+    expect(tool2End.content[0]).toMatchObject({
+      type: "diff",
+      path: "/tmp/project/b.ts",
+      oldText: "old-b",
+      newText: "new-b",
+    });
+    expect(tool2End.locations).toEqual([{ path: "/tmp/project/b.ts", line: 9 }]);
+
+    expect(agent.getSession(sessionId)?.pendingToolCalls.size).toBe(0);
   });
 });
