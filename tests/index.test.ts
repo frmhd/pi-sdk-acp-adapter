@@ -305,6 +305,46 @@ describe("Tool Execution Update Mapping", () => {
     expect((notification.update as any).rawOutput).toEqual(partialResult);
   });
 
+  test("maps terminal-backed bash updates to ACP terminal content", () => {
+    const rawOutput = {
+      type: "acp_terminal",
+      terminalId: "term-123",
+      input: { command: "echo hi", timeout: null },
+      execution: {
+        command: "sh",
+        args: ["-lc", "echo hi"],
+        cwd: "/workspace/project",
+        outputByteLimit: 51200,
+      },
+      output: "hi\n",
+      truncated: false,
+    };
+
+    const notification = mapToolExecutionUpdate(
+      "session-123",
+      {
+        toolCallId: "tool-1",
+        toolName: "bash",
+        partialResult: { content: [], details: undefined },
+      },
+      {
+        toolCallState: {
+          toolName: "bash",
+          terminalId: "term-123",
+          rawInput: { command: "echo hi" },
+          rawOutput,
+        },
+      },
+    );
+
+    expect((notification.update as any).status).toBe("in_progress");
+    expect((notification.update as any).title).toBe("Run: echo hi");
+    expect((notification.update as any).content).toEqual([
+      { type: "terminal", terminalId: "term-123" },
+    ]);
+    expect((notification.update as any).rawOutput).toEqual(rawOutput);
+  });
+
   test("keeps notification shape when partial output has no visible content", () => {
     const notification = mapToolExecutionUpdate("session-123", {
       toolCallId: "tool-1",
@@ -431,9 +471,53 @@ describe("Tool Execution End Mapping", () => {
     expect((notification.update as any).rawOutput).toEqual(result);
   });
 
+  test("keeps bash completion terminal-backed and preserves raw terminal metadata", () => {
+    const rawOutput = {
+      type: "acp_terminal",
+      terminalId: "term-123",
+      input: { command: "echo hi", timeout: null },
+      execution: {
+        command: "sh",
+        args: ["-lc", "echo hi"],
+        cwd: "/workspace/project",
+        outputByteLimit: 51200,
+      },
+      output: "hi\n",
+      truncated: false,
+      exitCode: 0,
+      signal: null,
+    };
+
+    const notification = mapToolExecutionEnd(
+      "session-123",
+      {
+        toolCallId: "tool-4",
+        toolName: "bash",
+        result: { content: [{ type: "text", text: "hi" }] },
+        isError: false,
+      },
+      {
+        toolCallState: {
+          toolName: "bash",
+          terminalId: "term-123",
+          rawInput: { command: "echo hi" },
+          rawOutput,
+        },
+      },
+    );
+
+    expect((notification.update as any).status).toBe("completed");
+    expect((notification.update as any).kind).toBe("execute");
+    expect((notification.update as any).title).toBe("Run: echo hi");
+    expect((notification.update as any).content).toEqual([
+      { type: "terminal", terminalId: "term-123" },
+    ]);
+    expect((notification.update as any).rawOutput).toEqual(rawOutput);
+  });
+
   test("maps error result to failed status", () => {
     const notification = mapToolExecutionEnd("session-123", {
-      toolCallId: "tool-4",
+      toolCallId: "tool-5",
       result: "File not found",
       isError: true,
     });
@@ -443,6 +527,135 @@ describe("Tool Execution End Mapping", () => {
 });
 
 describe("AcpAgent prompt tool state tracking", () => {
+  test("releases terminal-backed bash tool calls after the final ACP update", async () => {
+    const connection = createMockConnection();
+    const mockSession = createMockSession();
+    const releaseTerminal = vi.fn(async () => undefined);
+    let onEvent: ((event: any) => void) | undefined;
+    let runtimeOptions: any;
+
+    mockSession.subscribe = vi.fn((callback: (event: any) => void) => {
+      onEvent = callback;
+      return () => {};
+    });
+
+    mockSession.prompt = vi.fn(async () => {
+      onEvent?.({
+        type: "tool_execution_start",
+        toolCallId: "tool-bash",
+        toolName: "bash",
+        args: { command: "echo hi" },
+      });
+
+      runtimeOptions.onToolCallStateCaptured("tool-bash", {
+        toolName: "bash",
+        terminalId: "term-1",
+        releaseTerminal,
+        rawOutput: {
+          type: "acp_terminal",
+          terminalId: "term-1",
+          input: { command: "echo hi", timeout: null },
+          execution: {
+            command: "sh",
+            args: ["-lc", "echo hi"],
+            cwd: "/tmp/project",
+            outputByteLimit: 51200,
+          },
+          output: "hi\n",
+          truncated: false,
+        },
+      });
+
+      onEvent?.({
+        type: "tool_execution_update",
+        toolCallId: "tool-bash",
+        toolName: "bash",
+        partialResult: { content: [], details: undefined },
+      });
+
+      runtimeOptions.onToolCallStateCaptured("tool-bash", {
+        rawOutput: {
+          type: "acp_terminal",
+          terminalId: "term-1",
+          input: { command: "echo hi", timeout: null },
+          execution: {
+            command: "sh",
+            args: ["-lc", "echo hi"],
+            cwd: "/tmp/project",
+            outputByteLimit: 51200,
+          },
+          output: "hi\n",
+          truncated: false,
+          exitCode: 0,
+          signal: null,
+        },
+      });
+
+      onEvent?.({
+        type: "tool_execution_end",
+        toolCallId: "tool-bash",
+        toolName: "bash",
+        result: { content: [{ type: "text", text: "hi" }] },
+        isError: false,
+      });
+    });
+
+    const createRuntime = vi.fn(async (options: any) => {
+      runtimeOptions = options;
+      return {
+        session: mockSession,
+        dispose: vi.fn(),
+      };
+    });
+
+    const agent = createTestAgent(connection, createRuntime);
+
+    await agent.initialize({
+      protocolVersion: 1,
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: true,
+      },
+    });
+
+    const { sessionId } = await agent.newSession({ cwd: "/tmp/project" } as any);
+
+    await agent.prompt({
+      sessionId,
+      prompt: [{ type: "text", text: "Run a command" }],
+    } as any);
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const updates = connection.sessionUpdate.mock.calls.map(
+      ([notification]: [any]) => notification.update,
+    );
+
+    const inProgress = updates.find(
+      (update: any) =>
+        update.sessionUpdate === "tool_call_update" &&
+        update.toolCallId === "tool-bash" &&
+        update.status === "in_progress",
+    );
+    const completed = updates.find(
+      (update: any) =>
+        update.sessionUpdate === "tool_call_update" &&
+        update.toolCallId === "tool-bash" &&
+        update.status === "completed",
+    );
+
+    expect(inProgress.content).toEqual([{ type: "terminal", terminalId: "term-1" }]);
+    expect(completed.content).toEqual([{ type: "terminal", terminalId: "term-1" }]);
+    expect(completed.rawOutput).toMatchObject({
+      terminalId: "term-1",
+      exitCode: 0,
+      piResult: { content: [{ type: "text", text: "hi" }] },
+    });
+    expect(releaseTerminal).toHaveBeenCalledTimes(1);
+    expect(agent.getSession(sessionId)?.pendingToolCalls.size).toBe(0);
+  });
+
   test("keeps per-tool-call diffs isolated across overlapping tool executions", async () => {
     const connection = createMockConnection();
     const mockSession = createMockSession();

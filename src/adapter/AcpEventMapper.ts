@@ -32,6 +32,7 @@ import {
   createStructuredToolCallContent,
   createToolCallContent,
   createDiffContent,
+  createTerminalContent,
 } from "./types.js";
 
 // =============================================================================
@@ -262,6 +263,11 @@ function mapToolResultContent(result: unknown): ToolCallContent[] | undefined {
   return text ? [createToolCallContent(text)] : undefined;
 }
 
+function mapTerminalToolContent(context?: ToolEventMappingContext): ToolCallContent[] | undefined {
+  const terminalId = context?.toolCallState?.terminalId;
+  return terminalId ? [createTerminalContent(terminalId)] : undefined;
+}
+
 function buildToolMeta(toolName: string | undefined): Record<string, unknown> | undefined {
   return toolName ? { [TOOL_NAME_META_KEY]: toolName } : undefined;
 }
@@ -312,7 +318,7 @@ export function mapToolExecutionStart(
   event: { toolCallId: string; toolName: string; args: unknown },
   context?: ToolEventMappingContext,
 ): SessionNotification {
-  const args = getToolArgs(event.args);
+  const args = getToolArgs(event.args ?? context?.toolCallState?.rawInput);
   const toolName = getToolName(context, event.toolName) ?? event.toolName;
 
   const toolCall: ToolCall = {
@@ -342,13 +348,15 @@ export function mapToolExecutionUpdate(
   event: { toolCallId: string; toolName?: string; args?: unknown; partialResult: unknown },
   context?: ToolEventMappingContext,
 ): SessionNotification {
-  const args = getToolArgs(event.args);
+  const args = getToolArgs(event.args ?? context?.toolCallState?.rawInput);
   const toolName = getToolName(context, event.toolName);
 
   const toolUpdate: ToolCallUpdate = {
     toolCallId: event.toolCallId,
     status: "in_progress",
-    content: mapToolResultContent(event.partialResult),
+    content:
+      (toolName === "bash" ? mapTerminalToolContent(context) : undefined) ??
+      mapToolResultContent(event.partialResult),
     rawOutput: context?.toolCallState?.rawOutput ?? event.partialResult,
     title: toolName ? buildToolTitle(toolName, args, context) : undefined,
     locations: buildToolLocations(toolName, args, context),
@@ -384,7 +392,9 @@ export function mapToolExecutionEnd(
 
   let content: ToolCallContent[] | undefined;
 
-  if (!event.isError && context?.toolCallState?.diff) {
+  if (toolName === "bash") {
+    content = mapTerminalToolContent(context) ?? mapToolResultContent(event.result);
+  } else if (!event.isError && context?.toolCallState?.diff) {
     const diff = context.toolCallState.diff;
     content = [createDiffContent(diff.path, diff.newText, diff.oldText ?? undefined)];
   } else {

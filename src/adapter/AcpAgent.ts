@@ -161,6 +161,48 @@ function extractFirstChangedLine(result: unknown): number | undefined {
   return typeof details?.firstChangedLine === "number" ? details.firstChangedLine : undefined;
 }
 
+function mergeCapturedRawOutput(
+  toolCallState: AcpToolCallState | undefined,
+  nextValue: unknown,
+  phase: "update" | "end",
+): unknown {
+  if (!toolCallState?.rawOutput || typeof toolCallState.rawOutput !== "object") {
+    return nextValue;
+  }
+
+  if (toolCallState.toolName !== "bash") {
+    return nextValue;
+  }
+
+  return {
+    ...(toolCallState.rawOutput as Record<string, unknown>),
+    [phase === "update" ? "piPartialResult" : "piResult"]: nextValue,
+  };
+}
+
+async function releaseToolCallResources(
+  toolCallState: AcpToolCallState | undefined,
+): Promise<void> {
+  const releaseTerminal = toolCallState?.releaseTerminal;
+  if (!releaseTerminal) {
+    return;
+  }
+
+  delete toolCallState.releaseTerminal;
+
+  await releaseTerminal().catch((error) => {
+    console.warn("Failed to release ACP terminal:", error);
+  });
+}
+
+async function releasePendingToolCallResources(sessionState: AcpSessionState): Promise<void> {
+  const pendingToolCalls = Array.from(sessionState.pendingToolCalls.values());
+  await Promise.all(
+    pendingToolCalls.map((toolCallState) => releaseToolCallResources(toolCallState)),
+  );
+  sessionState.pendingToolCalls.clear();
+}
+
 // =============================================================================
 // ACP Adapter Configuration
 // =============================================================================
@@ -413,7 +455,11 @@ export class AcpAgent implements Agent {
         toolCallState = sessionState.pendingToolCalls.get(toolEvent.toolCallId);
         if (toolCallState) {
           toolCallState.toolName ??= toolEvent.toolName;
-          toolCallState.rawOutput = toolEvent.partialResult;
+          toolCallState.rawOutput = mergeCapturedRawOutput(
+            toolCallState,
+            toolEvent.partialResult,
+            "update",
+          );
         }
       } else if (eventType === "tool_execution_end") {
         const toolEvent = event as {
@@ -425,7 +471,7 @@ export class AcpAgent implements Agent {
         toolCallState = sessionState.pendingToolCalls.get(toolEvent.toolCallId);
         if (toolCallState) {
           toolCallState.toolName ??= toolEvent.toolName;
-          toolCallState.rawOutput = toolEvent.result;
+          toolCallState.rawOutput = mergeCapturedRawOutput(toolCallState, toolEvent.result, "end");
           const firstChangedLine = extractFirstChangedLine(toolEvent.result);
           if (firstChangedLine !== undefined) {
             toolCallState.firstChangedLine = firstChangedLine;
@@ -439,15 +485,24 @@ export class AcpAgent implements Agent {
         toolCallState,
       });
 
-      if (notification) {
-        // Bug 7 fix: handle errors from sessionUpdate
-        this.connection.sessionUpdate(notification).catch((err) => {
-          console.error(`Failed to send session update for ${params.sessionId}:`, err);
-        });
-      }
+      const notificationPromise = notification
+        ? this.connection.sessionUpdate(notification).catch((err) => {
+            console.error(`Failed to send session update for ${params.sessionId}:`, err);
+          })
+        : Promise.resolve();
 
       if (completedToolCallId) {
-        sessionState.pendingToolCalls.delete(completedToolCallId);
+        const finishedToolCallId = completedToolCallId;
+        const finishedToolCallState = toolCallState;
+        sessionState.pendingToolCalls.delete(finishedToolCallId);
+
+        void (async () => {
+          try {
+            await notificationPromise;
+          } finally {
+            await releaseToolCallResources(finishedToolCallState);
+          }
+        })();
       }
     });
 
@@ -607,6 +662,7 @@ export class AcpAgent implements Agent {
 
     if (sessionState) {
       sessionState.dispose?.();
+      await releasePendingToolCallResources(sessionState);
       sessionState.session = null;
       sessionState.dispose = null;
       this.sessions.delete(sessionId);

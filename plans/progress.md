@@ -8,6 +8,7 @@ Legend:
 ## Current Focus
 
 - [x] Start Phase 0
+- [x] Start Phase 2
 
 ## Phase 0 — Correctness and Honesty
 
@@ -35,15 +36,15 @@ Legend:
 
 ## Phase 2 — Terminal Integration
 
-- [ ] Design ACP-aware `bash` execution wrapper around Pi's `bash` tool
-- [ ] Create ACP terminals with command/args semantics instead of shell-string assumptions
-- [ ] Associate `toolCallId` with `terminalId` in adapter state
-- [ ] Emit terminal tool call content so Zed renders the live terminal card
-- [ ] Keep tool status synchronized with terminal lifecycle
-- [ ] Attach exit/truncation/full-output metadata to `rawOutput`
-- [ ] Release terminals safely after completion
-- [ ] Add/update tests for terminal-backed tool calls
-- [ ] Verify Phase 2 with `vp check` and `vp test`
+- [x] Design ACP-aware `bash` execution wrapper around Pi's `bash` tool
+- [x] Create ACP terminals with command/args semantics instead of shell-string assumptions
+- [x] Associate `toolCallId` with `terminalId` in adapter state
+- [x] Emit terminal tool call content so Zed renders the live terminal card
+- [x] Keep tool status synchronized with terminal lifecycle
+- [x] Attach exit/truncation/full-output metadata to `rawOutput`
+- [x] Release terminals safely after completion
+- [x] Add/update tests for terminal-backed tool calls
+- [x] Verify Phase 2 with `vp check` and `vp test`
 
 ## Phase 3 — Session Lifecycle
 

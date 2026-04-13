@@ -10,6 +10,7 @@ export type {
   AcpSessionState,
   AcpToolCallState,
   AcpToolCallDiff,
+  AcpBashTerminalRawOutput,
   AcpClientCapabilitiesSnapshot,
   ModelInfo,
   SessionConfigOptions,
@@ -74,6 +75,8 @@ export {
   mapStopReason,
   createStructuredToolCallContent,
   createToolCallContent,
+  createDiffContent,
+  createTerminalContent,
 } from "./adapter/AcpEventMapper.js";
 
 // Re-export AcpAgent

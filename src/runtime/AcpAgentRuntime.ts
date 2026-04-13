@@ -27,7 +27,6 @@ import {
   type ReadOperations,
   type WriteOperations,
   type EditOperations,
-  type BashOperations,
 } from "@mariozechner/pi-coding-agent";
 
 import {
@@ -38,6 +37,7 @@ import {
 } from "../adapter/AcpToolBridge.js";
 
 import {
+  type AcpBashTerminalRawOutput,
   type AcpClientCapabilitiesSnapshot,
   type AcpToolCallState,
   createMissingClientCapabilitiesMessage,
@@ -68,8 +68,10 @@ class AcpConnectionAdapter implements AcpClientInterface {
 
   createTerminal(params: {
     command: string;
+    args?: string[];
     cwd?: string;
     env?: EnvVariable[];
+    outputByteLimit?: number | null;
     sessionId: string;
   }): Promise<TerminalHandle> {
     if (!this.capabilities.supportsTerminal) {
@@ -78,8 +80,10 @@ class AcpConnectionAdapter implements AcpClientInterface {
 
     return this.connection.createTerminal({
       command: params.command,
+      args: params.args,
       cwd: params.cwd ?? null,
       env: params.env,
+      outputByteLimit: params.outputByteLimit ?? null,
       sessionId: params.sessionId,
     });
   }
@@ -172,6 +176,35 @@ function trackMutationToolCall<T>(
   });
 }
 
+function buildBashRawOutput(
+  input: { command: string; timeout?: number },
+  terminal: {
+    terminalId: string;
+    command: string;
+    args: string[];
+    cwd: string;
+    outputByteLimit: number | null;
+  },
+  update?: Partial<Pick<AcpBashTerminalRawOutput, "output" | "truncated" | "exitCode" | "signal">>,
+): AcpBashTerminalRawOutput {
+  return {
+    type: "acp_terminal",
+    input: {
+      command: input.command,
+      timeout: input.timeout ?? null,
+    },
+    execution: {
+      command: terminal.command,
+      args: terminal.args,
+      cwd: terminal.cwd,
+      outputByteLimit: terminal.outputByteLimit,
+    },
+    terminalId: terminal.terminalId,
+    fullOutputPath: null,
+    ...update,
+  };
+}
+
 // =============================================================================
 // Runtime Factory
 // =============================================================================
@@ -251,10 +284,87 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
     access: async (path: string) => readOps.access(path),
   };
 
-  const bashOps: BashOperations = new AcpTerminalOperations(acpClient);
-
   const readTool = createReadToolDefinition(options.cwd, { operations: readOps });
-  const bashTool = createBashToolDefinition(options.cwd, { operations: bashOps });
+
+  const bashToolBase = createBashToolDefinition(options.cwd);
+  const bashTool: typeof bashToolBase = {
+    ...bashToolBase,
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      options.onToolCallStateCaptured?.(toolCallId, {
+        toolName: "bash",
+        rawInput: params,
+      });
+
+      let emittedTerminalUpdate = false;
+      let terminalSnapshot:
+        | {
+            terminalId: string;
+            command: string;
+            args: string[];
+            cwd: string;
+            outputByteLimit: number | null;
+          }
+        | undefined;
+
+      const trackedBashOps = new AcpTerminalOperations(acpClient, {
+        onTerminalCreated: (terminal) => {
+          terminalSnapshot = {
+            terminalId: terminal.terminalId,
+            command: terminal.command,
+            args: terminal.args,
+            cwd: terminal.cwd,
+            outputByteLimit: terminal.outputByteLimit,
+          };
+
+          options.onToolCallStateCaptured?.(toolCallId, {
+            toolName: "bash",
+            terminalId: terminal.terminalId,
+            releaseTerminal: terminal.release,
+            rawOutput: buildBashRawOutput(params, terminalSnapshot),
+          });
+
+          if (!emittedTerminalUpdate) {
+            emittedTerminalUpdate = true;
+            onUpdate?.({ content: [], details: undefined });
+          }
+        },
+        onTerminalOutput: (output) => {
+          if (!terminalSnapshot) {
+            return;
+          }
+
+          options.onToolCallStateCaptured?.(toolCallId, {
+            rawOutput: buildBashRawOutput(params, terminalSnapshot, {
+              output: output.output,
+              truncated: output.truncated,
+            }),
+          });
+        },
+        onTerminalExit: (result) => {
+          if (!terminalSnapshot) {
+            return;
+          }
+
+          options.onToolCallStateCaptured?.(toolCallId, {
+            rawOutput: buildBashRawOutput(params, terminalSnapshot, {
+              output: result.output,
+              truncated: result.truncated,
+              exitCode: result.exitCode,
+              signal: result.signal,
+            }),
+          });
+        },
+      });
+
+      return createBashToolDefinition(options.cwd, { operations: trackedBashOps }).execute(
+        toolCallId,
+        params,
+        signal,
+        onUpdate,
+        ctx,
+      );
+    },
+  };
 
   const writeToolBase = createWriteToolDefinition(options.cwd, { operations: writeOps });
   const writeTool: typeof writeToolBase = {

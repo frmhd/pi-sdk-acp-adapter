@@ -45,12 +45,50 @@ export interface AcpToolCallDiff {
   newText: string;
 }
 
+/** Raw terminal execution metadata retained for ACP-backed bash calls. */
+export interface AcpBashTerminalRawOutput {
+  /** Marker for bash executions backed by an ACP terminal. */
+  type: "acp_terminal";
+  /** The original Pi bash tool input. */
+  input: {
+    command: string;
+    timeout: number | null;
+  };
+  /** The explicit ACP terminal command + args invocation. */
+  execution: {
+    command: string;
+    args: string[];
+    cwd: string;
+    outputByteLimit: number | null;
+  };
+  /** The ACP terminal id associated with the tool call. */
+  terminalId: string;
+  /** Latest terminal output retained by the ACP client. */
+  output?: string;
+  /** Whether terminal output was truncated by the ACP client. */
+  truncated?: boolean;
+  /** Final process exit code, if known. */
+  exitCode?: number | null;
+  /** Final terminating signal, if any. */
+  signal?: string | null;
+  /** Pi bash normally reports this when it writes a temp file; ACP terminals do not. */
+  fullOutputPath?: string | null;
+  /** Latest partial Pi tool payload, retained for debugging. */
+  piPartialResult?: unknown;
+  /** Final Pi tool payload, retained for debugging. */
+  piResult?: unknown;
+}
+
 /** Mutable adapter state captured for a single tool call. */
 export interface AcpToolCallState {
   /** Pi tool name, e.g. read/write/edit/bash. */
   toolName?: string;
   /** Absolute file path when the tool targets a single file. */
   path?: string;
+  /** ACP terminal id when the tool is backed by a client terminal. */
+  terminalId?: string;
+  /** Deferred cleanup hook for terminal-backed tool calls. */
+  releaseTerminal?: () => Promise<void>;
   /** File diff metadata for edit/write rendering. */
   diff?: AcpToolCallDiff;
   /** First changed line reported by Pi edit details. */

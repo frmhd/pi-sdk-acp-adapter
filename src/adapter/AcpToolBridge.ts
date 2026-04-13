@@ -13,10 +13,11 @@ import type {
   EnvVariable,
 } from "@agentclientprotocol/sdk";
 
-import type {
-  BashOperations,
-  ReadOperations,
-  WriteOperations,
+import {
+  DEFAULT_MAX_BYTES,
+  type BashOperations,
+  type ReadOperations,
+  type WriteOperations,
 } from "@mariozechner/pi-coding-agent";
 
 import { createToolCallContent, mapToolKind, type AcpClientCapabilitiesSnapshot } from "./types.js";
@@ -25,9 +26,37 @@ import { createToolCallContent, mapToolKind, type AcpClientCapabilitiesSnapshot 
 // Utils
 // =============================================================================
 
-/** Escape a string for use in a bash command */
+/** Escape a string for use in a POSIX shell command. */
 function escapeBash(str: string): string {
   return `'${str.replace(/'/g, "'\\''")}'`;
+}
+
+/** Escape a string for use in cmd.exe. */
+function escapeCmd(str: string): string {
+  return `"${str.replace(/(["^%])/g, "^$1")}"`;
+}
+
+/** Build an ACP terminal request for Pi bash semantics using explicit command + args. */
+export function createShellTerminalRequest(command: string): { command: string; args: string[] } {
+  if (process.platform === "win32") {
+    return {
+      command: "cmd.exe",
+      args: ["/d", "/s", "/c", command],
+    };
+  }
+
+  return {
+    command: process.env.SHELL || "sh",
+    args: ["-lc", command],
+  };
+}
+
+function createMkdirTerminalRequest(dir: string): { command: string; args: string[] } {
+  if (process.platform === "win32") {
+    return createShellTerminalRequest(`mkdir ${escapeCmd(dir)}`);
+  }
+
+  return createShellTerminalRequest(`mkdir -p ${escapeBash(dir)}`);
 }
 
 // =============================================================================
@@ -71,8 +100,10 @@ export interface AcpClientInterface {
   /** Create a terminal and execute a command */
   createTerminal(params: {
     command: string;
+    args?: string[];
     cwd?: string;
     env?: EnvVariable[];
+    outputByteLimit?: number | null;
     sessionId: string;
   }): Promise<TerminalHandle>;
   /** Read a text file */
@@ -87,19 +118,22 @@ export interface AcpClientInterface {
 
 interface TerminalPollResult {
   output: string;
+  truncated: boolean;
   exitCode: number | null;
+  signal: string | null;
 }
 
 async function pollTerminalToCompletion(
   terminal: TerminalHandle,
   options?: { signal?: AbortSignal },
 ): Promise<TerminalPollResult> {
-  let lastOutputLength = 0;
   let resolved = false;
-  let accumulatedOutput = "";
+  let latestOutput = "";
+  let latestTruncated = false;
 
   const abortHandler = () => {
-    resolved = true;
+    // Do not resolve early here; the caller is responsible for killing the terminal.
+    // We still wait for the terminal to report its final exit status/output.
   };
 
   if (options?.signal) {
@@ -114,20 +148,17 @@ async function pollTerminalToCompletion(
 
       try {
         const output = await terminal.currentOutput();
-
-        if (output.output.length > lastOutputLength) {
-          const newOutput = output.output.slice(lastOutputLength);
-          accumulatedOutput += newOutput;
-          lastOutputLength = output.output.length;
-        }
+        latestOutput = output.output;
+        latestTruncated = output.truncated;
 
         if (output.exitStatus !== undefined) {
           resolved = true;
-
-          const exitCode =
-            output.exitStatus?.exited === true ? (output.exitStatus.exitCode ?? null) : null;
-
-          resolve({ output: accumulatedOutput, exitCode });
+          resolve({
+            output: latestOutput,
+            truncated: latestTruncated,
+            exitCode: output.exitStatus?.exitCode ?? null,
+            signal: output.exitStatus?.signal ?? null,
+          });
           return;
         }
 
@@ -142,25 +173,24 @@ async function pollTerminalToCompletion(
 
     terminal
       .waitForExit()
-      .then((exitResponse) => {
+      .then(async (exitResponse) => {
         if (resolved) return;
         resolved = true;
 
-        terminal
-          .currentOutput()
-          .then((finalOutput) => {
-            if (finalOutput.output.length > lastOutputLength) {
-              const newOutput = finalOutput.output.slice(lastOutputLength);
-              accumulatedOutput += newOutput;
-            }
+        try {
+          const finalOutput = await terminal.currentOutput();
+          latestOutput = finalOutput.output;
+          latestTruncated = finalOutput.truncated;
+        } catch {
+          // Best-effort final output fetch only.
+        }
 
-            const exitCode = exitResponse.exited ? (exitResponse.exitCode ?? null) : null;
-            resolve({ output: accumulatedOutput, exitCode });
-          })
-          .catch(() => {
-            const exitCode = exitResponse.exited ? (exitResponse.exitCode ?? null) : null;
-            resolve({ output: accumulatedOutput, exitCode });
-          });
+        resolve({
+          output: latestOutput,
+          truncated: latestTruncated,
+          exitCode: exitResponse.exitCode ?? null,
+          signal: exitResponse.signal ?? null,
+        });
       })
       .catch((err) => {
         if (resolved) return;
@@ -178,12 +208,33 @@ async function pollTerminalToCompletion(
 // Terminal Management
 // =============================================================================
 
+/** Extra hooks used to associate ACP terminals with Pi bash tool calls. */
+export interface AcpTerminalLifecycleHooks {
+  onTerminalCreated?: (terminal: {
+    terminalId: string;
+    command: string;
+    args: string[];
+    cwd: string;
+    outputByteLimit: number | null;
+    release: () => Promise<void>;
+  }) => void;
+  onTerminalOutput?: (output: { output: string; truncated: boolean }) => void;
+  onTerminalExit?: (result: {
+    output: string;
+    truncated: boolean;
+    exitCode: number | null;
+    signal: string | null;
+  }) => void;
+}
+
 /** ACP terminal-backed BashOperations implementation. */
 export class AcpTerminalOperations implements BashOperations {
   private client: AcpClientInterface;
+  private hooks: AcpTerminalLifecycleHooks;
 
-  constructor(client: AcpClientInterface) {
+  constructor(client: AcpClientInterface, hooks: AcpTerminalLifecycleHooks = {}) {
     this.client = client;
+    this.hooks = hooks;
   }
 
   async exec(
@@ -208,12 +259,36 @@ export class AcpTerminalOperations implements BashOperations {
           .map(([name, value]) => ({ name, value: value as string }))
       : undefined;
 
+    const shellRequest = createShellTerminalRequest(command);
+    const outputByteLimit = DEFAULT_MAX_BYTES;
+
     const terminal = await this.client.createTerminal({
-      command,
+      command: shellRequest.command,
+      args: shellRequest.args,
       cwd,
       env,
+      outputByteLimit,
       sessionId: this.client.sessionId,
     });
+
+    let released = false;
+    const release = async () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      await terminal.release();
+    };
+
+    this.hooks.onTerminalCreated?.({
+      terminalId: terminal.id,
+      command: shellRequest.command,
+      args: shellRequest.args,
+      cwd,
+      outputByteLimit,
+      release,
+    });
+    const releaseOnFinally = !this.hooks.onTerminalCreated;
 
     let lastOutputLength = 0;
     let killed = false;
@@ -228,6 +303,7 @@ export class AcpTerminalOperations implements BashOperations {
 
       try {
         const output = await terminal.currentOutput();
+        this.hooks.onTerminalOutput?.({ output: output.output, truncated: output.truncated });
 
         if (output.output.length > lastOutputLength) {
           const newOutput = output.output.slice(lastOutputLength);
@@ -257,29 +333,31 @@ export class AcpTerminalOperations implements BashOperations {
       signal.addEventListener("abort", abortHandler);
     }
 
-    const timeoutHandle = timeout
-      ? setTimeout(() => {
-          killed = true;
-          void terminal.kill();
-        }, timeout)
-      : undefined;
+    const timeoutHandle =
+      timeout && timeout > 0
+        ? setTimeout(() => {
+            killed = true;
+            void terminal.kill();
+          }, timeout * 1000)
+        : undefined;
 
     try {
-      const exitResponse = await terminal.waitForExit();
+      const result = await pollTerminalToCompletion(terminal, { signal });
       resolved = true;
-
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-
-      return { exitCode: exitResponse.exitCode ?? null };
+      this.hooks.onTerminalExit?.(result);
+      return { exitCode: result.exitCode };
     } finally {
       if (signal) {
         signal.removeEventListener("abort", abortHandler);
       }
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-
-      terminal.release().catch(() => {
-        // Ignore release errors
-      });
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+      if (releaseOnFinally) {
+        await release().catch(() => {
+          // Ignore terminal release errors during best-effort cleanup.
+        });
+      }
     }
   }
 }
@@ -342,8 +420,10 @@ export class AcpWriteOperations implements WriteOperations {
       throw new Error("ACP client does not support terminal/create.");
     }
 
+    const mkdirRequest = createMkdirTerminalRequest(dir);
     const terminal = await this.client.createTerminal({
-      command: `mkdir -p ${escapeBash(dir)}`,
+      command: mkdirRequest.command,
+      args: mkdirRequest.args,
       cwd: dir,
       sessionId: this.client.sessionId,
     });
