@@ -181,88 +181,26 @@ function hasTerminalExited(output: {
   return output.exitStatus != null;
 }
 
-async function pollTerminalToCompletion(
+async function waitForTerminalCompletion(
   terminal: TerminalHandle,
   options?: { signal?: AbortSignal },
 ): Promise<TerminalPollResult> {
-  let resolved = false;
-  let latestOutput = "";
-  let latestTruncated = false;
+  // Use waitForExit() to efficiently wait for terminal completion
+  // without polling. Then fetch final output once.
+  const exitResponse = await terminal.waitForExit();
 
-  const abortHandler = () => {
-    // Do not resolve early here; the caller is responsible for killing the terminal.
-    // We still wait for the terminal to report its final exit status/output.
-  };
-
-  if (options?.signal) {
-    options.signal.addEventListener("abort", abortHandler);
+  if (options?.signal?.aborted) {
+    throw new Error("Terminal operation aborted");
   }
 
-  return new Promise<TerminalPollResult>((resolve, reject) => {
-    const poll = async () => {
-      if (resolved) {
-        return;
-      }
+  const finalOutput = await terminal.currentOutput();
 
-      try {
-        const output = await terminal.currentOutput();
-        latestOutput = output.output;
-        latestTruncated = output.truncated;
-
-        // ACP clients report a running terminal as `exitStatus: null`.
-        // Only treat the terminal as completed when an actual exit-status
-        // object is present.
-        if (hasTerminalExited(output)) {
-          resolved = true;
-          resolve({
-            output: latestOutput,
-            truncated: latestTruncated,
-            exitCode: output.exitStatus?.exitCode ?? null,
-            signal: output.exitStatus?.signal ?? null,
-          });
-          return;
-        }
-
-        setTimeout(poll, TERMINAL_POLL_INTERVAL);
-      } catch (err) {
-        resolved = true;
-        reject(err);
-      }
-    };
-
-    void poll();
-
-    terminal
-      .waitForExit()
-      .then(async (exitResponse) => {
-        if (resolved) return;
-        resolved = true;
-
-        try {
-          const finalOutput = await terminal.currentOutput();
-          latestOutput = finalOutput.output;
-          latestTruncated = finalOutput.truncated;
-        } catch {
-          // Best-effort final output fetch only.
-        }
-
-        resolve({
-          output: latestOutput,
-          truncated: latestTruncated,
-          exitCode: exitResponse.exitCode ?? null,
-          signal: exitResponse.signal ?? null,
-        });
-      })
-      .catch((err) => {
-        if (resolved) return;
-        resolved = true;
-        reject(err);
-      });
-  }).finally(() => {
-    if (options?.signal) {
-      options.signal.removeEventListener("abort", abortHandler);
-    }
-  });
+  return {
+    output: finalOutput.output,
+    truncated: finalOutput.truncated,
+    exitCode: exitResponse.exitCode ?? null,
+    signal: exitResponse.signal ?? null,
+  };
 }
 
 // =============================================================================
@@ -352,38 +290,11 @@ export class AcpTerminalOperations implements BashOperations {
     const releaseOnFinally = !this.hooks.onTerminalCreated;
 
     let killed = false;
-    let resolved = false;
+    let pollResolved = false;
 
-    const shouldStop = () => killed || signal?.aborted || resolved;
+    const shouldStop = () => killed || signal?.aborted || pollResolved;
 
-    const poll = async () => {
-      if (shouldStop()) {
-        return;
-      }
-
-      try {
-        const output = await terminal.currentOutput();
-        this.hooks.onTerminalOutput?.({ output: output.output, truncated: output.truncated });
-
-        // Do not stream incremental terminal snapshots into Pi's bash tool.
-        // ACP terminal output is a snapshot, not an append-only stream, so it can
-        // shrink or otherwise change between polls. Feeding those snapshots into
-        // Pi incrementally causes stale/incorrect final tool results.
-        // Instead, we let the ACP client own the live terminal UI and only pass
-        // the final terminal output back into Pi once the command has finished.
-        if (hasTerminalExited(output)) {
-          resolved = true;
-          return;
-        }
-
-        setTimeout(poll, TERMINAL_POLL_INTERVAL);
-      } catch {
-        // Stop polling on error
-      }
-    };
-
-    void poll();
-
+    // Set up abort handler before starting the poll loop
     const abortHandler = () => {
       killed = true;
       void terminal.kill();
@@ -393,6 +304,7 @@ export class AcpTerminalOperations implements BashOperations {
       signal.addEventListener("abort", abortHandler);
     }
 
+    // Set up timeout before starting the poll loop
     const timeoutHandle =
       timeout && timeout > 0
         ? setTimeout(() => {
@@ -401,16 +313,47 @@ export class AcpTerminalOperations implements BashOperations {
           }, timeout * 1000)
         : undefined;
 
-    try {
-      const result = await pollTerminalToCompletion(terminal, { signal });
-      resolved = true;
+    // Single poll loop that handles both live progress updates and completion detection
+    const terminalResult = await new Promise<TerminalPollResult>((resolve, reject) => {
+      const poll = async () => {
+        if (shouldStop()) {
+          return;
+        }
 
-      if (result.output.length > 0) {
-        onData(Buffer.from(result.output, "utf-8"));
+        try {
+          const output = await terminal.currentOutput();
+
+          // Live progress update via hooks
+          this.hooks.onTerminalOutput?.({ output: output.output, truncated: output.truncated });
+
+          // Check if terminal has completed
+          if (hasTerminalExited(output)) {
+            pollResolved = true;
+            resolve({
+              output: output.output,
+              truncated: output.truncated,
+              exitCode: output.exitStatus?.exitCode ?? null,
+              signal: output.exitStatus?.signal ?? null,
+            });
+            return;
+          }
+
+          setTimeout(poll, TERMINAL_POLL_INTERVAL);
+        } catch (err) {
+          reject(err);
+        }
+      };
+
+      void poll();
+    });
+
+    try {
+      if (terminalResult.output.length > 0) {
+        onData(Buffer.from(terminalResult.output, "utf-8"));
       }
 
-      this.hooks.onTerminalExit?.(result);
-      return { exitCode: result.exitCode };
+      this.hooks.onTerminalExit?.(terminalResult);
+      return { exitCode: terminalResult.exitCode };
     } finally {
       if (signal) {
         signal.removeEventListener("abort", abortHandler);
@@ -502,7 +445,7 @@ export class AcpWriteOperations implements WriteOperations {
     });
 
     try {
-      await pollTerminalToCompletion(terminal);
+      await waitForTerminalCompletion(terminal);
     } finally {
       terminal.release().catch(() => {});
     }

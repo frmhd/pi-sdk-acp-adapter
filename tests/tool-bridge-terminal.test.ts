@@ -48,13 +48,6 @@ describe("ACP terminal-backed bash execution", () => {
   });
 
   test("does not treat ACP exitStatus: null as process completion", async () => {
-    let resolveExit!: (value: { exitCode: number | null; signal: string | null }) => void;
-    const waitForExit = new Promise<{ exitCode: number | null; signal: string | null }>(
-      (resolve) => {
-        resolveExit = resolve;
-      },
-    );
-
     let outputCalls = 0;
     const terminal = {
       id: "term-1",
@@ -74,7 +67,7 @@ describe("ACP terminal-backed bash execution", () => {
           exitStatus: { exitCode: 0, signal: null },
         };
       }),
-      waitForExit: vi.fn(async () => waitForExit),
+      waitForExit: vi.fn(async () => ({ exitCode: 0, signal: null })),
       release: vi.fn(async () => undefined),
       kill: vi.fn(async () => undefined),
     };
@@ -91,36 +84,18 @@ describe("ACP terminal-backed bash execution", () => {
     } as any;
 
     const ops = new AcpTerminalOperations(client);
-    let settled = false;
 
-    const resultPromise = ops.exec("sleep 5 && ls", "/workspace/project", {
+    const result = await ops.exec("sleep 5 && ls", "/workspace/project", {
       onData: () => {},
     });
-    void resultPromise.then(() => {
-      settled = true;
-    });
 
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(settled).toBe(false);
-    expect(terminal.release).not.toHaveBeenCalled();
-
-    resolveExit({ exitCode: 0, signal: null });
-
-    await expect(resultPromise).resolves.toEqual({ exitCode: 0 });
-    expect(terminal.waitForExit).toHaveBeenCalledTimes(1);
+    // Should complete only when exitStatus is present (on second currentOutput call)
+    expect(result).toEqual({ exitCode: 0 });
+    expect(terminal.currentOutput).toHaveBeenCalledTimes(2);
     expect(terminal.release).toHaveBeenCalledTimes(1);
   });
 
   test("forwards final terminal output to Pi instead of stale intermediate snapshots", async () => {
-    let resolveExit!: (value: { exitCode: number | null; signal: string | null }) => void;
-    const waitForExit = new Promise<{ exitCode: number | null; signal: string | null }>(
-      (resolve) => {
-        resolveExit = resolve;
-      },
-    );
-
     let outputCalls = 0;
     const terminal = {
       id: "term-1",
@@ -140,7 +115,7 @@ describe("ACP terminal-backed bash execution", () => {
           exitStatus: { exitCode: 0, signal: null },
         };
       }),
-      waitForExit: vi.fn(async () => waitForExit),
+      waitForExit: vi.fn(async () => ({ exitCode: 0, signal: null })),
       release: vi.fn(async () => undefined),
       kill: vi.fn(async () => undefined),
     };
@@ -159,17 +134,14 @@ describe("ACP terminal-backed bash execution", () => {
     const ops = new AcpTerminalOperations(client);
     const chunks: string[] = [];
 
-    const resultPromise = ops.exec("sleep 5 && ls", "/workspace/project", {
+    const result = await ops.exec("sleep 5 && ls", "/workspace/project", {
       onData: (data) => chunks.push(data.toString("utf-8")),
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(chunks).toEqual([]);
-
-    resolveExit({ exitCode: 0, signal: null });
-
-    await expect(resultPromise).resolves.toEqual({ exitCode: 0 });
+    // Should only forward final output (from third call when exitStatus is present)
+    // not the intermediate "\n\n\n" snapshots
+    expect(result).toEqual({ exitCode: 0 });
     expect(chunks).toEqual(["AGENTS.md\nREADME.md\nsrc\n"]);
+    expect(terminal.currentOutput).toHaveBeenCalledTimes(3);
   });
 });
