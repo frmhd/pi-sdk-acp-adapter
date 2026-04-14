@@ -95,6 +95,90 @@ describe("ACP terminal-backed bash execution", () => {
     expect(terminal.release).toHaveBeenCalledTimes(1);
   });
 
+  test("injects pager-disabling environment variables to prevent interactive pagers", async () => {
+    const terminal = {
+      id: "term-1",
+      currentOutput: vi.fn(async () => ({
+        output: "done\n",
+        truncated: false,
+        exitStatus: { exitCode: 0, signal: null },
+      })),
+      waitForExit: vi.fn(async () => ({ exitCode: 0, signal: null })),
+      release: vi.fn(async () => undefined),
+      kill: vi.fn(async () => undefined),
+    };
+
+    const client = {
+      sessionId: "session-1",
+      capabilities: {
+        raw: null,
+        supportsReadTextFile: true,
+        supportsWriteTextFile: true,
+        supportsTerminal: true,
+      },
+      createTerminal: vi.fn(async () => terminal),
+    } as any;
+
+    const ops = new AcpTerminalOperations(client);
+
+    await ops.exec("gh search issues test", "/workspace/project", {
+      onData: () => {},
+    });
+
+    expect(client.createTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.arrayContaining([
+          { name: "PAGER", value: "cat" },
+          { name: "GH_PAGER", value: "cat" },
+          { name: "GIT_PAGER", value: "cat" },
+        ]),
+      }),
+    );
+  });
+
+  test("allows user-provided env vars to override pager-disabling defaults", async () => {
+    const terminal = {
+      id: "term-1",
+      currentOutput: vi.fn(async () => ({
+        output: "done\n",
+        truncated: false,
+        exitStatus: { exitCode: 0, signal: null },
+      })),
+      waitForExit: vi.fn(async () => ({ exitCode: 0, signal: null })),
+      release: vi.fn(async () => undefined),
+      kill: vi.fn(async () => undefined),
+    };
+
+    const client = {
+      sessionId: "session-1",
+      capabilities: {
+        raw: null,
+        supportsReadTextFile: true,
+        supportsWriteTextFile: true,
+        supportsTerminal: true,
+      },
+      createTerminal: vi.fn(async () => terminal),
+    } as any;
+
+    const ops = new AcpTerminalOperations(client);
+
+    await ops.exec("gh search issues test", "/workspace/project", {
+      onData: () => {},
+      env: { PAGER: "less", CUSTOM_VAR: "value" },
+    });
+
+    const callArgs = client.createTerminal.mock.calls[0][0];
+    const envVars = callArgs.env;
+
+    // User-provided PAGER should override default
+    expect(envVars).toContainEqual({ name: "PAGER", value: "less" });
+    // Other pager vars should still be set
+    expect(envVars).toContainEqual({ name: "GH_PAGER", value: "cat" });
+    expect(envVars).toContainEqual({ name: "GIT_PAGER", value: "cat" });
+    // User's custom var should be present
+    expect(envVars).toContainEqual({ name: "CUSTOM_VAR", value: "value" });
+  });
+
   test("forwards final terminal output to Pi instead of stale intermediate snapshots", async () => {
     let outputCalls = 0;
     const terminal = {

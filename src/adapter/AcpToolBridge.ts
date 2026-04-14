@@ -278,11 +278,22 @@ export class AcpTerminalOperations implements BashOperations {
       throw new Error("ACP client does not support terminal/create.");
     }
 
-    const env: EnvVariable[] | undefined = options.env
-      ? Object.entries(options.env)
-          .filter(([, value]) => value !== undefined)
-          .map(([name, value]) => ({ name, value: value as string }))
-      : undefined;
+    // Build environment variables, injecting pager-disabling vars to prevent
+    // interactive pagers (like less) from hanging the terminal
+    const pagerDisablingEnv: NodeJS.ProcessEnv = {
+      PAGER: "cat",
+      GH_PAGER: "cat",
+      GIT_PAGER: "cat",
+    };
+
+    const mergedEnv: NodeJS.ProcessEnv = {
+      ...pagerDisablingEnv,
+      ...options.env,
+    };
+
+    const env: EnvVariable[] | undefined = Object.entries(mergedEnv)
+      .filter(([, value]) => value !== undefined)
+      .map(([name, value]) => ({ name, value: value as string }));
 
     const shellRequest = createShellTerminalRequest(command);
     const outputByteLimit = DEFAULT_MAX_BYTES;
