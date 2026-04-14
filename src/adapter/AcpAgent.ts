@@ -42,7 +42,12 @@ import { SessionManager, type ModelRegistry } from "@mariozechner/pi-coding-agen
 
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 
-import type { AcpClientCapabilitiesSnapshot, AcpSessionState, AcpToolCallState } from "./types.js";
+import type {
+  AcpClientCapabilitiesSnapshot,
+  AcpSessionState,
+  AcpSessionUsageSnapshot,
+  AcpToolCallState,
+} from "./types.js";
 
 import { mapAgentEvent, mapStopReason } from "./AcpEventMapper.js";
 
@@ -51,7 +56,9 @@ import {
   buildAcpAvailableCommands,
   buildAcpSessionInfo,
   emitAvailableCommandsUpdate,
+  emitConfigOptionsUpdate,
   emitSessionInfoUpdate,
+  emitUsageUpdate,
   getAcpSessionDirectory,
   getCurrentSessionMetadata,
   listPersistedPiSessions,
@@ -67,6 +74,7 @@ import {
 import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
 
 import {
+  areSessionConfigOptionsEqual,
   getAvailableModels,
   getCurrentConfigOptions,
   getModelOptionValue,
@@ -173,6 +181,42 @@ function getOrCreateToolCallState(
   const created: AcpToolCallState = {};
   sessionState.pendingToolCalls.set(toolCallId, created);
   return created;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function normalizeTokenCount(value: number): number {
+  return Math.max(0, Math.round(value));
+}
+
+function buildSessionUsageSnapshot(
+  session: NonNullable<AcpSessionState["session"]>,
+): AcpSessionUsageSnapshot | undefined {
+  const contextUsage = session.getContextUsage?.();
+  const stats = session.getSessionStats?.();
+
+  const size =
+    contextUsage?.contextWindow ??
+    stats?.contextUsage?.contextWindow ??
+    session.state.model?.contextWindow;
+
+  // Note: Pi's getContextUsage() can return { tokens: null, ... } when tokens
+  // are unknown (for example right after compaction). Prefer that value when it
+  // is numeric, otherwise fall back to stats.contextUsage.tokens.
+  const rawUsed = contextUsage?.tokens != null ? contextUsage.tokens : stats?.contextUsage?.tokens;
+
+  if (!isFiniteNumber(size) || size <= 0 || rawUsed === null || rawUsed === undefined) {
+    return undefined;
+  }
+
+  const used = rawUsed;
+
+  return {
+    size: normalizeTokenCount(size),
+    used: normalizeTokenCount(used),
+  };
 }
 
 function extractFirstChangedLine(result: unknown): number | undefined {
@@ -406,6 +450,7 @@ export class AcpAgent implements Agent {
     });
 
     await this.refreshSessionMetadata(sessionState, true);
+    await this.refreshSessionUsage(sessionState, true);
     await this.refreshAvailableCommands(sessionState, true);
     await replaySessionHistory(
       this.connection,
@@ -463,6 +508,7 @@ export class AcpAgent implements Agent {
     });
 
     await this.refreshSessionMetadata(sessionState, true);
+    await this.refreshSessionUsage(sessionState, true);
     await this.refreshAvailableCommands(sessionState, true);
 
     return {
@@ -569,6 +615,7 @@ export class AcpAgent implements Agent {
 
       const finishedToolCallId = completedToolCallId;
       const finishedToolCallState = toolCallState;
+      const shouldRefreshUsageAfterEvent = eventType === "tool_execution_end";
       if (finishedToolCallId) {
         sessionState.pendingToolCalls.delete(finishedToolCallId);
       }
@@ -577,6 +624,18 @@ export class AcpAgent implements Agent {
         try {
           if (notification) {
             await this.connection.sessionUpdate(notification);
+          }
+
+          if (shouldRefreshUsageAfterEvent) {
+            await this.refreshSessionUsage(sessionState).catch((error) => {
+              console.warn(`Failed to refresh session usage for ${params.sessionId}:`, error);
+            });
+            await this.refreshConfigOptions(sessionState).catch((error) => {
+              console.warn(
+                `Failed to refresh session config options for ${params.sessionId}:`,
+                error,
+              );
+            });
           }
         } catch (err) {
           console.error(`Failed to send session update for ${params.sessionId}:`, err);
@@ -613,6 +672,12 @@ export class AcpAgent implements Agent {
     } finally {
       unsubscribe();
       await sessionUpdateQueue;
+      await this.refreshSessionUsage(sessionState).catch((error) => {
+        console.warn(`Failed to refresh session usage for ${params.sessionId}:`, error);
+      });
+      await this.refreshConfigOptions(sessionState).catch((error) => {
+        console.warn(`Failed to refresh session config options for ${params.sessionId}:`, error);
+      });
       await this.refreshSessionMetadata(sessionState).catch((error) => {
         console.warn(`Failed to refresh session metadata for ${params.sessionId}:`, error);
       });
@@ -672,6 +737,10 @@ export class AcpAgent implements Agent {
     }
 
     const response = buildSetSessionConfigOptionResponse(sessionState, availableModels);
+    sessionState.lastConfigOptions = response.configOptions;
+    await this.refreshSessionUsage(sessionState).catch((error) => {
+      console.warn(`Failed to refresh session usage for ${params.sessionId}:`, error);
+    });
     await this.refreshSessionMetadata(sessionState).catch((error) => {
       console.warn(`Failed to refresh session metadata for ${params.sessionId}:`, error);
     });
@@ -748,7 +817,12 @@ export class AcpAgent implements Agent {
   }
 
   private getConfigOptions(sessionState: AcpSessionState) {
-    return getCurrentConfigOptions(sessionState, getAvailableModels(this.config.modelRegistry));
+    const configOptions = getCurrentConfigOptions(
+      sessionState,
+      getAvailableModels(this.config.modelRegistry),
+    );
+    sessionState.lastConfigOptions = configOptions;
+    return configOptions;
   }
 
   private async createSessionState(options: {
@@ -769,6 +843,8 @@ export class AcpAgent implements Agent {
       currentThinkingLevel: this.config.defaultThinkingLevel || "medium",
       title: undefined,
       updatedAt: undefined,
+      lastUsageUpdate: undefined,
+      lastConfigOptions: undefined,
       pendingToolCalls: new Map(),
       getSlashCommands: undefined,
       availableCommands: undefined,
@@ -853,6 +929,43 @@ export class AcpAgent implements Agent {
     await emitSessionInfoUpdate(this.connection, sessionState.sessionId, metadata);
   }
 
+  private async refreshSessionUsage(sessionState: AcpSessionState, force = false): Promise<void> {
+    if (!sessionState.session) {
+      return;
+    }
+
+    const usage = buildSessionUsageSnapshot(sessionState.session);
+    if (!usage) {
+      return;
+    }
+
+    const changed =
+      force ||
+      sessionState.lastUsageUpdate?.size !== usage.size ||
+      sessionState.lastUsageUpdate?.used !== usage.used;
+
+    if (!changed) {
+      return;
+    }
+
+    sessionState.lastUsageUpdate = usage;
+    await emitUsageUpdate(this.connection, sessionState.sessionId, usage);
+  }
+
+  private async refreshConfigOptions(sessionState: AcpSessionState, force = false): Promise<void> {
+    const configOptions = getCurrentConfigOptions(
+      sessionState,
+      getAvailableModels(this.config.modelRegistry),
+    );
+
+    if (!force && areSessionConfigOptionsEqual(sessionState.lastConfigOptions, configOptions)) {
+      return;
+    }
+
+    sessionState.lastConfigOptions = configOptions;
+    await emitConfigOptionsUpdate(this.connection, sessionState.sessionId, configOptions);
+  }
+
   private scheduleInitialSessionUpdates(sessionState: AcpSessionState): void {
     setTimeout(() => {
       void this.refreshSessionMetadata(sessionState, true).catch((error) => {
@@ -860,6 +973,9 @@ export class AcpAgent implements Agent {
           `Failed to send initial session metadata for ${sessionState.sessionId}:`,
           error,
         );
+      });
+      void this.refreshSessionUsage(sessionState, true).catch((error) => {
+        console.warn(`Failed to send initial session usage for ${sessionState.sessionId}:`, error);
       });
       void this.refreshAvailableCommands(sessionState, true).catch((error) => {
         console.warn(`Failed to send initial slash commands for ${sessionState.sessionId}:`, error);

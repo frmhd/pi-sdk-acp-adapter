@@ -21,6 +21,9 @@ import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 
 import type { AcpSessionState } from "./types.js";
 
+export const USAGE_CONFIG_OPTION_ID = "_usage";
+const USAGE_CONFIG_OPTION_VALUE = "current";
+
 type ModelOptionIdentity = Pick<Model<Api>, "id" | "provider">;
 
 // =============================================================================
@@ -104,6 +107,119 @@ function thinkingLevelToOption(level: ThinkingLevel): SessionConfigSelectOption 
     name: THINKING_LEVEL_LABELS[level] || level.charAt(0).toUpperCase() + level.slice(1),
     value: level,
   };
+}
+
+function formatCompactNumber(value: number): string {
+  const absValue = Math.abs(value);
+
+  if (absValue >= 1_000_000) {
+    const scaled = value / 1_000_000;
+    return `${scaled >= 10 ? scaled.toFixed(0) : scaled.toFixed(1).replace(/\.0$/, "")}m`;
+  }
+
+  if (absValue >= 1_000) {
+    const scaled = value / 1_000;
+    return `${scaled >= 10 ? scaled.toFixed(0) : scaled.toFixed(1).replace(/\.0$/, "")}k`;
+  }
+
+  return `${Math.round(value)}`;
+}
+
+function formatPercent(percent: number): string {
+  const rounded = percent >= 10 ? percent.toFixed(0) : percent.toFixed(1);
+  return `${rounded.replace(/\.0$/, "")}%`;
+}
+
+function formatUsd(amount: number): string {
+  if (amount >= 1) {
+    return `$${amount.toFixed(2).replace(/\.00$/, "")}`;
+  }
+
+  if (amount >= 0.1) {
+    return `$${amount.toFixed(3).replace(/0+$/, "").replace(/\.$/, "")}`;
+  }
+
+  return `$${amount.toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}`;
+}
+
+function getSessionUsageDetails(session: AcpSessionState): {
+  contextWindow?: number;
+  usedTokens?: number;
+  percent?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  totalTokens?: number;
+  cost?: number;
+} {
+  const contextUsage = session.session?.getContextUsage?.();
+  const stats = session.session?.getSessionStats?.();
+
+  return {
+    contextWindow:
+      contextUsage?.contextWindow ??
+      stats?.contextUsage?.contextWindow ??
+      session.session?.state.model?.contextWindow,
+    usedTokens: contextUsage?.tokens ?? stats?.contextUsage?.tokens ?? undefined,
+    percent: contextUsage?.percent ?? stats?.contextUsage?.percent ?? undefined,
+    inputTokens: stats?.tokens.input,
+    outputTokens: stats?.tokens.output,
+    cacheReadTokens: stats?.tokens.cacheRead,
+    cacheWriteTokens: stats?.tokens.cacheWrite,
+    totalTokens: stats?.tokens.total,
+    cost: stats?.cost,
+  };
+}
+
+function buildUsageConfigLabel(session: AcpSessionState): string {
+  const usage = getSessionUsageDetails(session);
+  const usedLabel =
+    typeof usage.usedTokens === "number" ? formatCompactNumber(Math.max(0, usage.usedTokens)) : "?";
+  const sizeLabel =
+    typeof usage.contextWindow === "number"
+      ? formatCompactNumber(Math.max(0, usage.contextWindow))
+      : "?";
+  const percentLabel =
+    typeof usage.percent === "number" && Number.isFinite(usage.percent)
+      ? ` · ${formatPercent(Math.max(0, usage.percent))}`
+      : "";
+
+  return `${usedLabel}/${sizeLabel}${percentLabel}`;
+}
+
+function buildUsageConfigDescription(session: AcpSessionState): string {
+  const usage = getSessionUsageDetails(session);
+  const parts: string[] = [];
+
+  if (typeof usage.inputTokens === "number") {
+    parts.push(`↑${formatCompactNumber(Math.max(0, usage.inputTokens))}`);
+  }
+
+  if (typeof usage.outputTokens === "number") {
+    parts.push(`↓${formatCompactNumber(Math.max(0, usage.outputTokens))}`);
+  }
+
+  if (typeof usage.cacheReadTokens === "number" && usage.cacheReadTokens > 0) {
+    parts.push(`R${formatCompactNumber(usage.cacheReadTokens)}`);
+  }
+
+  if (typeof usage.cacheWriteTokens === "number" && usage.cacheWriteTokens > 0) {
+    parts.push(`W${formatCompactNumber(usage.cacheWriteTokens)}`);
+  }
+
+  // if (typeof usage.totalTokens === "number") {
+  //   parts.push(`Σ${formatCompactNumber(Math.max(0, usage.totalTokens))}`);
+  // }
+
+  if (typeof usage.cost === "number" && usage.cost > 0) {
+    parts.push(formatUsd(usage.cost));
+  }
+
+  const contextLabel = buildUsageConfigLabel(session);
+  return parts.length > 0
+    ? `${parts.join(" · ")} · ${contextLabel}`
+    : `Read-only session usage: ctx ${contextLabel}`;
 }
 
 // =============================================================================
@@ -210,6 +326,30 @@ export function createThinkingConfigOption(
   } as SessionConfigOption;
 }
 
+export function createUsageConfigOption(session: AcpSessionState): SessionConfigOption {
+  const label = buildUsageConfigLabel(session);
+  const description = buildUsageConfigDescription(session);
+
+  const selectPayload: SessionConfigSelect = {
+    currentValue: USAGE_CONFIG_OPTION_VALUE,
+    options: [
+      {
+        value: USAGE_CONFIG_OPTION_VALUE,
+        name: label,
+        description,
+      },
+    ],
+  };
+
+  return {
+    type: "select",
+    id: USAGE_CONFIG_OPTION_ID,
+    name: "Usage",
+    description,
+    ...selectPayload,
+  } as SessionConfigOption;
+}
+
 // =============================================================================
 // Current Config State
 // =============================================================================
@@ -223,6 +363,8 @@ export function getCurrentConfigOptions(
   availableModels: Model<Api>[],
 ): SessionConfigOption[] {
   const options: SessionConfigOption[] = [];
+  // Add read-only usage display workaround for ACP clients without UsageUpdate support.
+  options.push(createUsageConfigOption(session));
 
   // Add model config option
   options.push(
@@ -363,6 +505,11 @@ export async function handleSetSessionConfigOption(
       return { applied: true };
     }
 
+    case USAGE_CONFIG_OPTION_ID:
+      // Read-only display-only option used as a workaround for ACP clients
+      // that do not yet render usage_update notifications.
+      return { applied: true };
+
     default:
       return { applied: false, error: `Unknown config option: ${optionId}` };
   }
@@ -379,4 +526,11 @@ export function buildSetSessionConfigOptionResponse(
   return {
     configOptions: getCurrentConfigOptions(session, availableModels),
   };
+}
+
+export function areSessionConfigOptionsEqual(
+  left: SessionConfigOption[] | undefined,
+  right: SessionConfigOption[],
+): boolean {
+  return JSON.stringify(left ?? null) === JSON.stringify(right);
 }

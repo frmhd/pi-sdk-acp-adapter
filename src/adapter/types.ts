@@ -101,6 +101,14 @@ export interface AcpToolCallState {
   rawOutput?: unknown;
 }
 
+/** Latest ACP usage snapshot emitted for a session. */
+export interface AcpSessionUsageSnapshot {
+  /** Total context window size in tokens. */
+  size: number;
+  /** Tokens currently in the active model context. */
+  used: number;
+}
+
 /** ACP session state */
 export interface AcpSessionState {
   /** Unique session identifier for ACP protocol */
@@ -121,6 +129,10 @@ export interface AcpSessionState {
   title?: string | null;
   /** Latest updatedAt emitted to the ACP client. */
   updatedAt?: string | null;
+  /** Last usage update emitted to the ACP client. */
+  lastUsageUpdate?: AcpSessionUsageSnapshot;
+  /** Last config options emitted/returned to the ACP client. */
+  lastConfigOptions?: SessionConfigOption[];
   /** Per-tool-call ACP rendering state captured during execution. */
   pendingToolCalls: Map<string, AcpToolCallState>;
   /** Callback for reading Pi slash commands available in this session. */

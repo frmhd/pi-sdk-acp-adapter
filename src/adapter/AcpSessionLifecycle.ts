@@ -7,6 +7,7 @@ import type {
   AgentSideConnection,
   AvailableCommand,
   ContentBlock,
+  SessionConfigOption,
   SessionInfo as AcpSessionInfo,
   SessionNotification,
 } from "@agentclientprotocol/sdk";
@@ -200,6 +201,38 @@ export async function emitSessionInfoUpdate(
       sessionUpdate: "session_info_update",
       title: metadata.title,
       updatedAt: metadata.updatedAt,
+    },
+  });
+}
+
+export async function emitUsageUpdate(
+  connection: AgentSideConnection,
+  sessionId: string,
+  usage: {
+    size: number;
+    used: number;
+  },
+): Promise<void> {
+  await emitSessionNotification(connection, {
+    sessionId,
+    update: {
+      sessionUpdate: "usage_update",
+      size: usage.size,
+      used: usage.used,
+    },
+  });
+}
+
+export async function emitConfigOptionsUpdate(
+  connection: AgentSideConnection,
+  sessionId: string,
+  configOptions: SessionConfigOption[],
+): Promise<void> {
+  await emitSessionNotification(connection, {
+    sessionId,
+    update: {
+      sessionUpdate: "config_option_update",
+      configOptions,
     },
   });
 }
