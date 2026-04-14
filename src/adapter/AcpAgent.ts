@@ -373,8 +373,11 @@ export class AcpAgent implements Agent {
       sessionManager,
     });
 
-    await this.refreshSessionMetadata(sessionState, true);
-    await this.refreshAvailableCommands(sessionState, true);
+    // Important: delay initial session/update notifications until after the
+    // session/new response is sent. ACP clients like Zed do not know the new
+    // session id until the response arrives, so notifications sent before then
+    // can be dropped as "unknown session" updates.
+    this.scheduleInitialSessionUpdates(sessionState);
 
     return {
       sessionId: sessionState.sessionId,
@@ -848,6 +851,20 @@ export class AcpAgent implements Agent {
     sessionState.title = metadata.title;
     sessionState.updatedAt = metadata.updatedAt;
     await emitSessionInfoUpdate(this.connection, sessionState.sessionId, metadata);
+  }
+
+  private scheduleInitialSessionUpdates(sessionState: AcpSessionState): void {
+    setTimeout(() => {
+      void this.refreshSessionMetadata(sessionState, true).catch((error) => {
+        console.warn(
+          `Failed to send initial session metadata for ${sessionState.sessionId}:`,
+          error,
+        );
+      });
+      void this.refreshAvailableCommands(sessionState, true).catch((error) => {
+        console.warn(`Failed to send initial slash commands for ${sessionState.sessionId}:`, error);
+      });
+    }, 0);
   }
 
   private async refreshAvailableCommands(
