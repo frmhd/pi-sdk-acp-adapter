@@ -1,0 +1,2 @@
+- [ ] - subagents, look how it works in zed builtin agent
+- [ ] - investigate how we can show contex information (zed agent can show it, investigate)
