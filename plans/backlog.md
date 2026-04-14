@@ -1,2 +1,3 @@
 - [ ] - subagents, look how it works in zed builtin agent
 - [ ] - investigate how we can show contex information (zed agent can show it, investigate)
+- [ ] - learn how streaming in edit tool working in zed agent and why our adapter not working like that
