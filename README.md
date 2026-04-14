@@ -30,6 +30,7 @@ It presents Pi honestly as **Pi Coding Agent** while mapping Pi's native 4-tool 
 - `unstable_resumeSession` resumes without replay
 - `unstable_listSessions` lists persisted Pi sessions
 - `session_info_update` keeps title and `updatedAt` in sync
+- `available_commands_update` advertises Pi slash commands (extensions, prompt templates, skills)
 
 ### Payload conventions used for compatibility
 
@@ -57,6 +58,7 @@ Implemented and intentionally supported:
   - thought chunks
   - tool calls / tool call updates
   - session info updates
+  - available commands updates
 
 Client capability requirements:
 
@@ -130,6 +132,7 @@ When validating in Zed, confirm:
 - `bash` renders as a live terminal card
 - session list / load / resume work against persisted Pi sessions
 - model and thinking-level config options behave correctly
+- Pi slash commands appear in the client and are accepted when invoked
 
 ## Planning docs
 

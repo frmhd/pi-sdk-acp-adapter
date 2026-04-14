@@ -5,6 +5,7 @@ import { isAbsolute, join, resolve as resolvePath } from "node:path";
 
 import type {
   AgentSideConnection,
+  AvailableCommand,
   ContentBlock,
   SessionInfo as AcpSessionInfo,
   SessionNotification,
@@ -14,6 +15,7 @@ import type {
   AgentSession,
   SessionInfo as PiSessionInfo,
   SessionEntry,
+  SlashCommandInfo,
 } from "@mariozechner/pi-coding-agent";
 
 import type {
@@ -198,6 +200,49 @@ export async function emitSessionInfoUpdate(
       sessionUpdate: "session_info_update",
       title: metadata.title,
       updatedAt: metadata.updatedAt,
+    },
+  });
+}
+
+function fallbackCommandDescription(command: SlashCommandInfo): string {
+  return `Run /${command.name}`;
+}
+
+export function buildAcpAvailableCommands(commands: SlashCommandInfo[]): AvailableCommand[] {
+  return commands.map((command) => ({
+    name: command.name,
+    description: command.description?.trim() || fallbackCommandDescription(command),
+  }));
+}
+
+export function areAvailableCommandsEqual(
+  left: AvailableCommand[] | undefined,
+  right: AvailableCommand[],
+): boolean {
+  if (!left || left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((command, index) => {
+    const other = right[index];
+    return (
+      command.name === other.name &&
+      command.description === other.description &&
+      JSON.stringify(command.input ?? null) === JSON.stringify(other.input ?? null)
+    );
+  });
+}
+
+export async function emitAvailableCommandsUpdate(
+  connection: AgentSideConnection,
+  sessionId: string,
+  availableCommands: AvailableCommand[],
+): Promise<void> {
+  await emitSessionNotification(connection, {
+    sessionId,
+    update: {
+      sessionUpdate: "available_commands_update",
+      availableCommands,
     },
   });
 }

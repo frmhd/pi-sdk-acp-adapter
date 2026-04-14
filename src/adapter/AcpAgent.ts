@@ -47,7 +47,10 @@ import type { AcpClientCapabilitiesSnapshot, AcpSessionState, AcpToolCallState }
 import { mapAgentEvent, mapStopReason } from "./AcpEventMapper.js";
 
 import {
+  areAvailableCommandsEqual,
+  buildAcpAvailableCommands,
   buildAcpSessionInfo,
+  emitAvailableCommandsUpdate,
   emitSessionInfoUpdate,
   getAcpSessionDirectory,
   getCurrentSessionMetadata,
@@ -283,6 +286,7 @@ export class AcpAgent implements Agent {
   private createRuntime: (options: CreateAcpAgentRuntimeOptions) => Promise<{
     session: import("@mariozechner/pi-coding-agent").AgentSession;
     dispose: () => void;
+    getSlashCommands?: () => import("@mariozechner/pi-coding-agent").SlashCommandInfo[];
   }>;
 
   constructor(
@@ -291,6 +295,7 @@ export class AcpAgent implements Agent {
     createRuntime: (options: CreateAcpAgentRuntimeOptions) => Promise<{
       session: import("@mariozechner/pi-coding-agent").AgentSession;
       dispose: () => void;
+      getSlashCommands?: () => import("@mariozechner/pi-coding-agent").SlashCommandInfo[];
     }>,
   ) {
     this.connection = connection;
@@ -369,6 +374,7 @@ export class AcpAgent implements Agent {
     });
 
     await this.refreshSessionMetadata(sessionState, true);
+    await this.refreshAvailableCommands(sessionState, true);
 
     return {
       sessionId: sessionState.sessionId,
@@ -397,6 +403,7 @@ export class AcpAgent implements Agent {
     });
 
     await this.refreshSessionMetadata(sessionState, true);
+    await this.refreshAvailableCommands(sessionState, true);
     await replaySessionHistory(
       this.connection,
       sessionState.sessionId,
@@ -453,6 +460,7 @@ export class AcpAgent implements Agent {
     });
 
     await this.refreshSessionMetadata(sessionState, true);
+    await this.refreshAvailableCommands(sessionState, true);
 
     return {
       configOptions: this.getConfigOptions(sessionState),
@@ -605,6 +613,9 @@ export class AcpAgent implements Agent {
       await this.refreshSessionMetadata(sessionState).catch((error) => {
         console.warn(`Failed to refresh session metadata for ${params.sessionId}:`, error);
       });
+      await this.refreshAvailableCommands(sessionState).catch((error) => {
+        console.warn(`Failed to refresh slash commands for ${params.sessionId}:`, error);
+      });
     }
   }
 
@@ -756,6 +767,8 @@ export class AcpAgent implements Agent {
       title: undefined,
       updatedAt: undefined,
       pendingToolCalls: new Map(),
+      getSlashCommands: undefined,
+      availableCommands: undefined,
     };
 
     const createSessionRuntimeOptions: CreateAcpAgentRuntimeOptions = {
@@ -773,7 +786,9 @@ export class AcpAgent implements Agent {
     };
 
     try {
-      const { session, dispose } = await this.createRuntime(createSessionRuntimeOptions);
+      const { session, dispose, getSlashCommands } = await this.createRuntime(
+        createSessionRuntimeOptions,
+      );
 
       if (session.sessionId && session.sessionId !== sessionId) {
         throw new Error(
@@ -783,6 +798,7 @@ export class AcpAgent implements Agent {
 
       sessionState.session = session;
       sessionState.dispose = dispose;
+      sessionState.getSlashCommands = getSlashCommands;
       sessionState.currentModelId = session.state.model
         ? getModelOptionValue(session.state.model)
         : undefined;
@@ -834,6 +850,24 @@ export class AcpAgent implements Agent {
     await emitSessionInfoUpdate(this.connection, sessionState.sessionId, metadata);
   }
 
+  private async refreshAvailableCommands(
+    sessionState: AcpSessionState,
+    force = false,
+  ): Promise<void> {
+    const getSlashCommands = sessionState.getSlashCommands;
+    if (!getSlashCommands) {
+      return;
+    }
+
+    const availableCommands = buildAcpAvailableCommands(getSlashCommands());
+    if (!force && areAvailableCommandsEqual(sessionState.availableCommands, availableCommands)) {
+      return;
+    }
+
+    sessionState.availableCommands = availableCommands;
+    await emitAvailableCommandsUpdate(this.connection, sessionState.sessionId, availableCommands);
+  }
+
   /**
    * Close and remove a session.
    */
@@ -851,6 +885,8 @@ export class AcpAgent implements Agent {
       await releasePendingToolCallResources(sessionState);
       sessionState.session = null;
       sessionState.dispose = null;
+      sessionState.getSlashCommands = undefined;
+      sessionState.availableCommands = undefined;
       this.sessions.delete(sessionId);
     }
   }

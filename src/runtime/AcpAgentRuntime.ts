@@ -219,6 +219,7 @@ function buildBashRawOutput(
 export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOptions): Promise<{
   session: AgentSession;
   dispose: () => void;
+  getSlashCommands: () => import("@mariozechner/pi-coding-agent").SlashCommandInfo[];
 }> {
   const missingCapabilities = getMissingRequiredClientCapabilities(options.clientCapabilities);
   if (missingCapabilities.length > 0) {
@@ -472,13 +473,14 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
     sessionManager: options.sessionManager,
   };
 
-  const { session } = await createAgentSession(sessionOptions);
+  const { session, extensionsResult } = await createAgentSession(sessionOptions);
 
   return {
     session,
     dispose: () => {
       session.dispose();
     },
+    getSlashCommands: () => extensionsResult.runtime.getCommands(),
   };
 }
 
@@ -498,6 +500,7 @@ export function createAcpAgentRuntimeFactory(
   ): Promise<{
     session: AgentSession;
     dispose: () => void;
+    getSlashCommands: () => import("@mariozechner/pi-coding-agent").SlashCommandInfo[];
   }> => {
     return createAcpAgentRuntime({
       ...options,

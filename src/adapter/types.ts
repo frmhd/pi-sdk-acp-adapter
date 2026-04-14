@@ -19,12 +19,14 @@ import type {
   StopReason,
   ContentBlock,
   ClientCapabilities,
+  AvailableCommand,
 } from "@agentclientprotocol/sdk";
 
 import type {
   AgentSession,
   AgentSessionEvent,
   AgentSessionEventListener,
+  SlashCommandInfo,
 } from "@mariozechner/pi-coding-agent";
 
 import type { ThinkingLevel, AgentEvent } from "@mariozechner/pi-agent-core";
@@ -121,6 +123,10 @@ export interface AcpSessionState {
   updatedAt?: string | null;
   /** Per-tool-call ACP rendering state captured during execution. */
   pendingToolCalls: Map<string, AcpToolCallState>;
+  /** Callback for reading Pi slash commands available in this session. */
+  getSlashCommands?: () => SlashCommandInfo[];
+  /** Last slash command list advertised to the ACP client. */
+  availableCommands?: AvailableCommand[];
 }
 
 // =============================================================================
@@ -334,6 +340,7 @@ export type {
   StopReason,
   ContentBlock,
   ClientCapabilities,
+  AvailableCommand,
 };
 
 export type { AgentSession, AgentSessionEvent, AgentSessionEventListener };
