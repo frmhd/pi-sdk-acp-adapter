@@ -38,6 +38,8 @@ import type {
   ResumeSessionResponse,
 } from "@agentclientprotocol/sdk";
 
+import type { ImageContent as PiImageContent } from "@mariozechner/pi-ai";
+
 import { SessionManager, type ModelRegistry } from "@mariozechner/pi-coding-agent";
 
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
@@ -97,28 +99,47 @@ const PROTOCOL_VERSION = 1;
 // Content Extraction Helpers
 // =============================================================================
 
+/** Result of extracting content from ACP ContentBlock array. */
+interface ExtractedContent {
+  /** Combined text from all text blocks. */
+  text: string;
+  /** Image content blocks for Pi SDK. */
+  images: PiImageContent[];
+}
+
 /**
- * Extract text content from ACP ContentBlock array.
- * Combines all text blocks into a single string.
+ * Extract text and images from ACP ContentBlock array.
+ * Combines all text blocks into a single string and collects image blocks.
  */
-function extractTextFromContent(blocks: ContentBlock[]): string {
-  const parts: string[] = [];
+function extractContentFromBlocks(blocks: ContentBlock[]): ExtractedContent {
+  const textParts: string[] = [];
+  const images: PiImageContent[] = [];
 
   for (const block of blocks) {
     if (block.type === "text") {
-      parts.push(block.text);
+      textParts.push(block.text);
+    } else if (block.type === "image") {
+      images.push({
+        type: "image",
+        data: block.data,
+        mimeType: block.mimeType,
+      });
     } else if (block.type === "resource_link") {
       // Include resource link text as baseline support (Bug 9 fix)
       const resourceBlock = block as { uri?: string; text?: string };
       if (resourceBlock.text) {
-        parts.push(resourceBlock.text);
+        textParts.push(resourceBlock.text);
       } else if (resourceBlock.uri) {
-        parts.push(`[Resource: ${resourceBlock.uri}]`);
+        textParts.push(`[Resource: ${resourceBlock.uri}]`);
       }
     }
+    // Note: audio and embeddedResource blocks are currently ignored
   }
 
-  return parts.join("\n\n");
+  return {
+    text: textParts.join("\n\n"),
+    images,
+  };
 }
 
 /**
@@ -379,7 +400,7 @@ export class AcpAgent implements Agent {
       agentCapabilities: {
         loadSession: true,
         promptCapabilities: {
-          image: false,
+          image: true,
           audio: false,
           embeddedContext: false,
         },
@@ -534,10 +555,10 @@ export class AcpAgent implements Agent {
 
     const session = sessionState.session;
 
-    // Extract text from content blocks (includes resource_link text)
-    const rawUserText = extractTextFromContent(params.prompt);
+    // Extract text and images from content blocks
+    const { text: rawUserText, images } = extractContentFromBlocks(params.prompt);
 
-    if (!rawUserText.trim()) {
+    if (!rawUserText.trim() && images.length === 0) {
       return {
         stopReason: "end_turn",
       };
@@ -648,8 +669,8 @@ export class AcpAgent implements Agent {
     });
 
     try {
-      // Forward prompt to Pi
-      await session.prompt(userText);
+      // Forward prompt to Pi with images if present
+      await session.prompt(userText, images.length > 0 ? { images } : undefined);
 
       // Bug 1 fix: Map Pi's stopReason to ACP's StopReason
       const lastMessage = session.state.messages[session.state.messages.length - 1];
