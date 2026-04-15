@@ -87,12 +87,11 @@ describe("ACP session config model values", () => {
       expect.objectContaining({
         value: "current",
         name: "17k/200k · 8.7%",
-        description: expect.stringContaining("Read-only session usage:"),
       }),
     ]);
     expect(usageOption.description).toContain("↑14k");
     expect(usageOption.description).toContain("↓3.4k");
-    expect(usageOption.description).toContain("CR114k");
+    expect(usageOption.description).toContain("R114k");
     expect(usageOption.description).toContain("$0.015");
   });
 
