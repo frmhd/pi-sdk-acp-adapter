@@ -63,7 +63,7 @@ describe("ACP session config model values", () => {
     expect(findModelById("gpt-4.1", models, "openai")).toBe(models[0]);
   });
 
-  test("includes a read-only usage display config option", () => {
+  test("includes a read-only usage display config option for Zed client", () => {
     const options = getCurrentConfigOptions(
       {
         currentModelId: getModelOptionValue(models[0]),
@@ -93,6 +93,7 @@ describe("ACP session config model values", () => {
         },
       } as any,
       models,
+      { name: "zed", version: "1.0.0" },
     );
 
     const usageOption = options.find((option) => option.id === USAGE_CONFIG_OPTION_ID) as any;

@@ -251,6 +251,7 @@ describe("AcpAgent session lifecycle", () => {
           fs: { readTextFile: true, writeTextFile: true },
           terminal: true,
         },
+        clientInfo: { name: "zed", version: "1.0.0" },
       });
 
       const created = await agent.newSession({
@@ -458,6 +459,7 @@ describe("AcpAgent session lifecycle", () => {
         fs: { readTextFile: true, writeTextFile: true },
         terminal: true,
       },
+      clientInfo: { name: "zed", version: "1.0.0" },
     });
 
     const { sessionId } = await agent.newSession({

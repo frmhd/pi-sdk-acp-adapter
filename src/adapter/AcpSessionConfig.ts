@@ -239,6 +239,17 @@ function clientSupportsGroupedOptions(clientInfo: Implementation | null | undefi
 }
 
 /**
+ * Determine if the ACP client supports the usage config option hack.
+ * This is a workaround for clients without native UsageUpdate support.
+ * Currently only enabled for Zed as WebStorm doesn't update configOptions properly.
+ */
+function clientSupportsUsageConfigOption(clientInfo: Implementation | null | undefined): boolean {
+  if (!clientInfo?.name) return false;
+  // Only enable for Zed - WebStorm doesn't update this config option properly
+  return clientInfo.name.toLowerCase() === "zed";
+}
+
+/**
  * Create a model selection config option for ACP.
  * When currentModelId is undefined, currentValue is set to the first model's
  * serialized option value so the client always has a valid selection (empty
@@ -383,7 +394,10 @@ export function getCurrentConfigOptions(
 ): SessionConfigOption[] {
   const options: SessionConfigOption[] = [];
   // Add read-only usage display workaround for ACP clients without UsageUpdate support.
-  options.push(createUsageConfigOption(session));
+  // Only enabled for Zed as WebStorm doesn't update configOptions properly.
+  if (clientSupportsUsageConfigOption(clientInfo)) {
+    options.push(createUsageConfigOption(session));
+  }
 
   // Add model config option
   options.push(
