@@ -1,3 +1,7 @@
-- [ ] - subagents, look how it works in zed builtin agent
-- [ ] - investigate how we can show contex information (zed agent can show it, investigate)
-- [ ] - learn how streaming in edit tool working in zed agent and why our adapter not working like that
+- [x] subagents, look how it works in zed builtin agent
+- [x] investigate how we can show contex information (zed agent can show it, investigate)
+- [ ] learn how streaming in edit tool working in zed agent and why our adapter not working like that
+- [ ] make fallback to built in read/write tools when client is not compatable (ex: Obsidian Agent Client ext.)
+- [ ] check in JetBrains ACP client
+- [ ] path of files on read/edit/write cards should be project rooted while it not files outside project, than keep absolute path
+- [ ] implement [terminal auth](https://agentclientprotocol.com/rfds/auth-methods.md)
