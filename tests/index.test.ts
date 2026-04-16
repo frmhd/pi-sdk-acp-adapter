@@ -378,7 +378,7 @@ describe("Tool Execution Start Mapping", () => {
       { cwd: "/workspace/project" },
     );
 
-    expect((notification.update as any).title).toBe("Write /workspace/project/src/new.ts");
+    expect((notification.update as any).title).toBe("Write src/new.ts");
     expect((notification.update as any).kind).toBe("edit");
     expect((notification.update as any).locations).toEqual([
       { path: "/workspace/project/src/new.ts" },
@@ -498,7 +498,7 @@ describe("Tool Execution End Mapping", () => {
     expect((notification.update as any).toolCallId).toBe("tool-1");
     expect((notification.update as any).status).toBe("completed");
     expect((notification.update as any).kind).toBe("edit");
-    expect((notification.update as any).title).toBe("Create /workspace/project/src/new.ts");
+    expect((notification.update as any).title).toBe("Create src/new.ts");
     expect((notification.update as any).locations).toEqual([
       { path: "/workspace/project/src/new.ts" },
     ]);
@@ -543,7 +543,7 @@ describe("Tool Execution End Mapping", () => {
       },
     );
 
-    expect((notification.update as any).title).toBe("Edit /workspace/project/src/file.ts");
+    expect((notification.update as any).title).toBe("Edit src/file.ts");
     expect((notification.update as any).locations).toEqual([
       { path: "/workspace/project/src/file.ts", line: 7 },
     ]);

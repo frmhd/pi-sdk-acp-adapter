@@ -48,6 +48,34 @@ export interface ToolEventMappingContext {
 // Path / Title Helpers
 // =============================================================================
 
+/**
+ * Converts an absolute path to a display path.
+ * - If the path is within the project (cwd), returns a project-relative path
+ * - If the path is outside the project, returns the absolute path
+ */
+function toDisplayPath(absolutePath: string, cwd?: string): string {
+  if (!cwd || !absolutePath || absolutePath.length === 0) {
+    return absolutePath;
+  }
+
+  // Normalize paths for comparison (handle trailing separators)
+  const normalizedCwd = cwd.endsWith("/") ? cwd.slice(0, -1) : cwd;
+
+  // Check if path is exactly the cwd
+  if (absolutePath === normalizedCwd) {
+    return ".";
+  }
+
+  // Check if path starts with cwd + separator
+  const prefix = `${normalizedCwd}/`;
+  if (absolutePath.startsWith(prefix)) {
+    return absolutePath.slice(prefix.length);
+  }
+
+  // Path is outside project, keep absolute
+  return absolutePath;
+}
+
 function expandToolPath(filePath: string): string {
   if (filePath === "~") {
     return homedir();
@@ -106,17 +134,18 @@ function buildToolTitle(
   context?: ToolEventMappingContext,
 ): string {
   const path = getAbsoluteToolPath(args, context);
+  const displayPath = path ? toDisplayPath(path, context?.cwd) : undefined;
 
   switch (toolName) {
     case "read":
-      return path ? `Read ${path}` : "Read file";
+      return displayPath ? `Read ${displayPath}` : "Read file";
     case "edit":
-      return path ? `Edit ${path}` : "Edit file";
+      return displayPath ? `Edit ${displayPath}` : "Edit file";
     case "write":
       if (context?.toolCallState?.diff?.oldText === null) {
-        return path ? `Create ${path}` : "Create file";
+        return displayPath ? `Create ${displayPath}` : "Create file";
       }
-      return path ? `Write ${path}` : "Write file";
+      return displayPath ? `Write ${displayPath}` : "Write file";
     case "bash":
       return typeof args.command === "string" ? `Run: ${args.command}` : "Run command";
     default:

@@ -629,7 +629,7 @@ describe("AcpAgent session lifecycle", () => {
         expect.objectContaining({
           sessionUpdate: "tool_call",
           toolCallId: "tool-read-1",
-          title: `Read ${join(projectDir, "src/index.ts")}`,
+          title: "Read src/index.ts",
           locations: [{ path: join(projectDir, "src/index.ts") }],
           rawInput: { path: "src/index.ts" },
           _meta: { tool_name: "read" },
