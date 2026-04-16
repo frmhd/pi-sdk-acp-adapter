@@ -78,6 +78,7 @@ describe("ACP runtime read fallback", () => {
       acpConnection: connection,
       clientCapabilities: {
         raw: null,
+        clientInfo: null,
         supportsReadTextFile: true,
         supportsWriteTextFile: true,
         supportsTerminal: true,

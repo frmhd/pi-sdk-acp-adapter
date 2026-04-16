@@ -11,8 +11,10 @@ import type {
   SessionConfigSelect,
   SessionConfigSelectOptions,
   SessionConfigSelectOption,
+  SessionConfigSelectGroup,
   SetSessionConfigOptionRequest,
   SetSessionConfigOptionResponse,
+  Implementation,
 } from "@agentclientprotocol/sdk";
 
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
@@ -227,6 +229,16 @@ function buildUsageConfigDescription(session: AcpSessionState): string {
 // =============================================================================
 
 /**
+ * Determine if the ACP client supports grouped config options.
+ * Zed handles groups well; WebStorm and others may not.
+ */
+function clientSupportsGroupedOptions(clientInfo: Implementation | null | undefined): boolean {
+  if (!clientInfo?.name) return false;
+  // Zed supports grouped options well
+  return clientInfo.name.toLowerCase() === "zed";
+}
+
+/**
  * Create a model selection config option for ACP.
  * When currentModelId is undefined, currentValue is set to the first model's
  * serialized option value so the client always has a valid selection (empty
@@ -236,12 +248,20 @@ export function createModelConfigOption(
   availableModels: Model<Api>[],
   currentModelId: string | undefined,
   currentProvider?: string,
+  clientInfo?: Implementation | null,
 ): SessionConfigOption {
   if (availableModels.length === 0) {
-    // Return an empty/default option if no models are available
+    // Return a placeholder option when no models are available so the config
+    // option remains visible in ACP clients (WebStorm filters out empty options)
     const selectPayload: SessionConfigSelect = {
-      currentValue: "",
-      options: [],
+      currentValue: "no_models",
+      options: [
+        {
+          value: "no_models",
+          name: "No models available",
+          description: "Configure API keys to enable model selection",
+        },
+      ],
     };
     return {
       type: "select",
@@ -253,15 +273,6 @@ export function createModelConfigOption(
     } as SessionConfigOption;
   }
 
-  // Group models by provider
-  const modelsByProvider = new Map<string, Model<Api>[]>();
-
-  for (const model of availableModels) {
-    const existing = modelsByProvider.get(model.provider) || [];
-    existing.push(model);
-    modelsByProvider.set(model.provider, existing);
-  }
-
   // Determine currentValue using the exact ACP option value. This keeps the
   // selected option aligned with what ACP clients persist/favorite.
   const currentModel = currentModelId
@@ -269,22 +280,29 @@ export function createModelConfigOption(
     : undefined;
   const currentValue = getModelOptionValue(currentModel ?? availableModels[0]!);
 
-  // Create options - either grouped or flat based on provider count
+  // Use grouped options for clients that support them (Zed), flat list for others.
+  // Provider name is already included in the option display name via modelToOption().
   let options: SessionConfigSelectOptions;
+  if (clientSupportsGroupedOptions(clientInfo)) {
+    // Group by provider for Zed
+    const modelsByProvider = new Map<string, Model<Api>[]>();
+    for (const model of availableModels) {
+      const existing = modelsByProvider.get(model.provider) || [];
+      existing.push(model);
+      modelsByProvider.set(model.provider, existing);
+    }
 
-  if (modelsByProvider.size > 1) {
-    // Group by provider
-    const groups = Array.from(modelsByProvider.entries()).map(([provider, models]) => ({
-      group: provider,
-      name: provider.charAt(0).toUpperCase() + provider.slice(1),
-      options: models.map(modelToOption),
-    }));
-
+    const groups: SessionConfigSelectGroup[] = Array.from(modelsByProvider.entries()).map(
+      ([provider, models]) => ({
+        group: provider,
+        name: provider.charAt(0).toUpperCase() + provider.slice(1),
+        options: models.map(modelToOption),
+      }),
+    );
     options = groups;
   } else {
-    // Flat list if only one provider
-    const allModels = Array.from(modelsByProvider.values()).flat();
-    options = allModels.map(modelToOption);
+    // Flat list for WebStorm and other clients
+    options = availableModels.map(modelToOption);
   }
 
   const selectPayload: SessionConfigSelect = {
@@ -361,6 +379,7 @@ export function createUsageConfigOption(session: AcpSessionState): SessionConfig
 export function getCurrentConfigOptions(
   session: AcpSessionState,
   availableModels: Model<Api>[],
+  clientInfo?: Implementation | null,
 ): SessionConfigOption[] {
   const options: SessionConfigOption[] = [];
   // Add read-only usage display workaround for ACP clients without UsageUpdate support.
@@ -372,6 +391,7 @@ export function getCurrentConfigOptions(
       availableModels,
       session.currentModelId,
       session.session?.state.model?.provider,
+      clientInfo,
     ),
   );
 
@@ -522,9 +542,10 @@ export async function handleSetSessionConfigOption(
 export function buildSetSessionConfigOptionResponse(
   session: AcpSessionState,
   availableModels: Model<Api>[],
+  clientInfo?: Implementation | null,
 ): SetSessionConfigOptionResponse {
   return {
-    configOptions: getCurrentConfigOptions(session, availableModels),
+    configOptions: getCurrentConfigOptions(session, availableModels, clientInfo),
   };
 }
 

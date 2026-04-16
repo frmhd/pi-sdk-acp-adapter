@@ -58,6 +58,7 @@ describe("ACP runtime edit progress", () => {
       acpConnection: connection,
       clientCapabilities: {
         raw: null,
+        clientInfo: null,
         supportsReadTextFile: true,
         supportsWriteTextFile: true,
         supportsTerminal: true,

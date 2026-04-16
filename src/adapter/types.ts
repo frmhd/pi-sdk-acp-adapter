@@ -20,6 +20,7 @@ import type {
   ContentBlock,
   ClientCapabilities,
   AvailableCommand,
+  Implementation,
 } from "@agentclientprotocol/sdk";
 
 import type {
@@ -149,6 +150,8 @@ export interface AcpSessionState {
 export interface AcpClientCapabilitiesSnapshot {
   /** Raw client capabilities from initialize(). */
   raw: ClientCapabilities | null;
+  /** Client implementation info (name, version, title). */
+  clientInfo: Implementation | null;
   /** Whether the client can service fs/read_text_file. */
   supportsReadTextFile: boolean;
   /** Whether the client can service fs/write_text_file. */
@@ -167,9 +170,11 @@ function hasLegacyTerminalAuthCapability(capabilities?: ClientCapabilities | nul
 /** Capture and normalize client capabilities advertised during initialize(). */
 export function captureClientCapabilities(
   capabilities?: ClientCapabilities | null,
+  clientInfo?: Implementation | null,
 ): AcpClientCapabilitiesSnapshot {
   return {
     raw: capabilities ?? null,
+    clientInfo: clientInfo ?? null,
     supportsReadTextFile: capabilities?.fs?.readTextFile === true,
     supportsWriteTextFile: capabilities?.fs?.writeTextFile === true,
     supportsTerminal: capabilities?.terminal === true,

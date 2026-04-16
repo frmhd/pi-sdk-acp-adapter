@@ -25,15 +25,32 @@ describe("ACP session config model values", () => {
     },
   ] as any[];
 
-  test("uses provider-qualified select values so duplicate model ids stay distinct", () => {
+  test("uses provider-qualified select values so duplicate model ids stay distinct (flat format)", () => {
+    // By default (no clientInfo), we use flat format
     const option = createModelConfigOption(models, getModelOptionValue(models[1]), "azure") as any;
-    const values = option.options.flatMap((group: any) =>
-      group.options.map((entry: any) => entry.value),
-    );
+    const values = option.options.map((entry: any) => entry.value);
 
     expect(values).toEqual([getModelOptionValue(models[0]), getModelOptionValue(models[1])]);
     expect(new Set(values).size).toBe(2);
     expect(option.currentValue).toBe(getModelOptionValue(models[1]));
+  });
+
+  test("uses grouped format for Zed client", () => {
+    const zedClientInfo = { name: "zed", version: "1.0.0" };
+    const option = createModelConfigOption(
+      models,
+      getModelOptionValue(models[1]),
+      "azure",
+      zedClientInfo,
+    ) as any;
+    // Zed gets grouped options
+    expect(option.options[0]).toHaveProperty("group");
+    expect(option.options[0]).toHaveProperty("options");
+    const values = option.options.flatMap((group: any) =>
+      group.options.map((entry: any) => entry.value),
+    );
+    expect(values).toContain(getModelOptionValue(models[0]));
+    expect(values).toContain(getModelOptionValue(models[1]));
   });
 
   test("findModelById resolves provider-qualified ACP values exactly", () => {

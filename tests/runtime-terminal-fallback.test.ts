@@ -55,6 +55,7 @@ describe("ACP runtime terminal fallback", () => {
       acpConnection: connection,
       clientCapabilities: {
         raw: null,
+        clientInfo: null,
         supportsReadTextFile: true,
         supportsWriteTextFile: true,
         supportsTerminal: false,

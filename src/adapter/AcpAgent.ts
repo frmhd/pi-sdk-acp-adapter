@@ -392,7 +392,10 @@ export class AcpAgent implements Agent {
    */
   async initialize(params: InitializeRequest): Promise<InitializeResponse> {
     this.initialized = true;
-    this.clientCapabilities = captureClientCapabilities(params.clientCapabilities);
+    this.clientCapabilities = captureClientCapabilities(
+      params.clientCapabilities,
+      params.clientInfo,
+    );
 
     const missingCapabilities = getMissingRequiredClientCapabilities(this.clientCapabilities);
     if (missingCapabilities.length > 0) {
@@ -768,7 +771,11 @@ export class AcpAgent implements Agent {
       console.warn(`Config option not applied: ${result.error}`);
     }
 
-    const response = buildSetSessionConfigOptionResponse(sessionState, availableModels);
+    const response = buildSetSessionConfigOptionResponse(
+      sessionState,
+      availableModels,
+      this.clientCapabilities.clientInfo,
+    );
     sessionState.lastConfigOptions = response.configOptions;
     await this.refreshSessionUsage(sessionState).catch((error) => {
       console.warn(`Failed to refresh session usage for ${params.sessionId}:`, error);
@@ -873,6 +880,7 @@ export class AcpAgent implements Agent {
     const configOptions = getCurrentConfigOptions(
       sessionState,
       getAvailableModels(this.config.modelRegistry),
+      this.clientCapabilities.clientInfo,
     );
     sessionState.lastConfigOptions = configOptions;
     return configOptions;
@@ -1009,6 +1017,7 @@ export class AcpAgent implements Agent {
     const configOptions = getCurrentConfigOptions(
       sessionState,
       getAvailableModels(this.config.modelRegistry),
+      this.clientCapabilities.clientInfo,
     );
 
     if (!force && areSessionConfigOptionsEqual(sessionState.lastConfigOptions, configOptions)) {
