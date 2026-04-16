@@ -155,6 +155,13 @@ export interface AcpClientCapabilitiesSnapshot {
   supportsWriteTextFile: boolean;
   /** Whether the client can service terminal methods. */
   supportsTerminal: boolean;
+  /** Whether the client opted into ACP terminal auth methods. */
+  supportsTerminalAuth: boolean;
+}
+
+function hasLegacyTerminalAuthCapability(capabilities?: ClientCapabilities | null): boolean {
+  const meta = capabilities?._meta;
+  return Boolean(meta && typeof meta === "object" && meta["terminal-auth"] === true);
 }
 
 /** Capture and normalize client capabilities advertised during initialize(). */
@@ -166,6 +173,8 @@ export function captureClientCapabilities(
     supportsReadTextFile: capabilities?.fs?.readTextFile === true,
     supportsWriteTextFile: capabilities?.fs?.writeTextFile === true,
     supportsTerminal: capabilities?.terminal === true,
+    supportsTerminalAuth:
+      capabilities?.auth?.terminal === true || hasLegacyTerminalAuthCapability(capabilities),
   };
 }
 

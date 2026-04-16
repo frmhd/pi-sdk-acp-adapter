@@ -45,6 +45,7 @@ It presents Pi honestly as **Pi Coding Agent** while mapping Pi's native 4-tool 
 Implemented and intentionally supported:
 
 - `initialize`
+- `authenticate` (ACP terminal auth for Pi OAuth providers when the client advertises `auth.terminal`)
 - `session/new`
 - `session/load`
 - `session/prompt`
@@ -66,7 +67,11 @@ Client capability requirements:
 - `fs.writeTextFile`
 - `terminal`
 
-If an ACP client does not provide those capabilities, the adapter fails fast instead of pretending Pi can operate correctly.
+Optional client auth capability:
+
+- `auth.terminal` — enables ACP terminal auth methods for Pi's built-in OAuth providers
+
+If an ACP client does not provide the required filesystem/terminal capabilities, the adapter fails fast instead of pretending Pi can operate correctly.
 
 Client-specific UX enhancements are driven by compatibility testing (Zed is the reference), but Pi's native behavior remains the source of truth.
 
@@ -106,3 +111,13 @@ Or, when installed as a package/binary:
 ```bash
 pi-acp
 ```
+
+## Terminal auth mode
+
+When an ACP client advertises `auth.terminal`, the adapter now exposes ACP terminal auth methods for Pi's built-in OAuth providers. Those methods re-run the same `pi-acp` binary with an internal flag:
+
+```bash
+pi-acp --acp-terminal-auth anthropic
+```
+
+That interactive flow stores credentials in Pi's standard auth store (`~/.pi/agent/auth.json`).

@@ -87,6 +87,10 @@ import { assertPathAuthorized, getAuthorizedRoots } from "./AcpToolBridge.js";
 
 import type { CreateAcpAgentRuntimeOptions } from "../runtime/AcpAgentRuntime.js";
 import { ACP_AGENT_NAME, ACP_AGENT_TITLE, ADAPTER_VERSION } from "../packageMetadata.js";
+import {
+  buildTerminalAuthMethods,
+  getProviderIdFromTerminalAuthMethodId,
+} from "../auth/terminalAuth.js";
 
 // =============================================================================
 // ACP Protocol Version
@@ -412,7 +416,9 @@ export class AcpAgent implements Agent {
           resume: {},
         },
       },
-      authMethods: [],
+      authMethods: buildTerminalAuthMethods(this.config.modelRegistry.authStorage, {
+        enabled: this.clientCapabilities.supportsTerminalAuth,
+      }),
     };
   }
 
@@ -770,19 +776,40 @@ export class AcpAgent implements Agent {
   }
 
   /**
-   * Authenticate the client.
+   * Acknowledge completion of a client-run authentication flow.
    *
-   * Pi uses its own authentication mechanism, so this is a no-op.
-   *
-   * @param _params - Authentication request (ignored)
-   * @returns Success response
+   * For ACP terminal auth, the client launches this same binary in a separate
+   * interactive terminal. That child process updates Pi's auth.json. The ACP
+   * client then calls authenticate(methodId) on the long-lived ACP connection so
+   * we can reload credentials and refresh session model lists.
    */
-  async authenticate(_params: AuthenticateRequest): Promise<AuthenticateResponse> {
-    // Pi handles its own authentication via API keys stored in auth.json
-    // ACP authentication is not needed
-    return {
-      // No auth required
-    };
+  async authenticate(params: AuthenticateRequest): Promise<AuthenticateResponse> {
+    const providerId = getProviderIdFromTerminalAuthMethodId(params.methodId);
+    if (!providerId) {
+      throw new Error(`Unknown ACP auth method: ${params.methodId}`);
+    }
+
+    this.config.modelRegistry.authStorage.reload();
+    this.config.modelRegistry.refresh();
+
+    if (!this.config.modelRegistry.authStorage.hasAuth(providerId)) {
+      throw new Error(
+        `Authentication for provider ${JSON.stringify(providerId)} is not configured. Complete the terminal auth flow and try again.`,
+      );
+    }
+
+    await Promise.all(
+      Array.from(this.sessions.values()).map((sessionState) =>
+        this.refreshConfigOptions(sessionState, true).catch((error) => {
+          console.warn(
+            `Failed to refresh session config options after authenticating ${providerId}:`,
+            error,
+          );
+        }),
+      ),
+    );
+
+    return {};
   }
 
   // =============================================================================

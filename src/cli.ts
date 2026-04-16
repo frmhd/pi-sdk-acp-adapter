@@ -24,6 +24,7 @@ import { AcpAgent } from "./adapter/AcpAgent.js";
 import { createAcpAgentRuntime } from "./runtime/AcpAgentRuntime.js";
 import { ModelRegistry, AuthStorage, getAgentDir } from "@mariozechner/pi-coding-agent";
 import type { CreateAcpAgentRuntimeOptions } from "./runtime/AcpAgentRuntime.js";
+import { parseTerminalAuthCliArgs, runTerminalAuthCli } from "./auth/terminalAuth.js";
 
 // =============================================================================
 // Error Handling
@@ -158,6 +159,17 @@ function createRuntimeFactory(
  * 4. Graceful shutdown handlers
  */
 async function main(): Promise<void> {
+  // Set up signal handlers early so ACP mode and terminal auth mode behave consistently.
+  setupSignalHandlers();
+
+  const terminalAuthArgs = parseTerminalAuthCliArgs(process.argv.slice(2));
+  if (terminalAuthArgs.isTerminalAuthInvocation) {
+    const exitCode = await runTerminalAuthCli({
+      providerId: terminalAuthArgs.providerId,
+    });
+    process.exit(exitCode);
+  }
+
   // Log startup
   console.error("[pi-acp] Starting Pi ACP Adapter...");
 
@@ -196,9 +208,6 @@ async function main(): Promise<void> {
 
       return agent;
     }, stream);
-
-    // Set up signal handlers for graceful shutdown
-    setupSignalHandlers();
 
     // Handle connection closure
     connection.signal.addEventListener("abort", () => {

@@ -55,6 +55,12 @@ function createTestAgent(
     {
       modelRegistry: {
         getAvailable: () => [],
+        refresh: vi.fn(() => undefined),
+        authStorage: {
+          getOAuthProviders: () => [],
+          reload: vi.fn(() => undefined),
+          hasAuth: vi.fn(() => false),
+        },
       } as any,
     },
     createRuntime ??

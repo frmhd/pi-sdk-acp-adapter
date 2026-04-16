@@ -81,6 +81,7 @@ describe("ACP runtime read fallback", () => {
         supportsReadTextFile: true,
         supportsWriteTextFile: true,
         supportsTerminal: true,
+        supportsTerminalAuth: false,
       },
       sessionManager: {} as any,
       sessionId: "session-1",

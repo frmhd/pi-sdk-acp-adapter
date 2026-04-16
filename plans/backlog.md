@@ -4,4 +4,4 @@
 - [ ] make fallback to built in read/write tools when client is not compatable (ex: Obsidian Agent Client ext.)
 - [ ] check in JetBrains ACP client
 - [ ] path of files on read/edit/write cards should be project rooted while it not files outside project, than keep absolute path
-- [ ] implement [terminal auth](https://agentclientprotocol.com/rfds/auth-methods.md)
+- [x] implement [terminal auth](https://agentclientprotocol.com/rfds/auth-methods.md)
