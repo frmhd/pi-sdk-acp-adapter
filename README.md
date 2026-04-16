@@ -1,8 +1,8 @@
 # pi-sdk-acp-adapter
 
-ACP adapter for [Pi Coding Agent](https://github.com/badlogic/pi-mono) with a strong focus on Zed compatibility.
+ACP adapter for [Pi Coding Agent](https://github.com/badlogic/pi-mono) implementing the Agent Communication Protocol (ACP).
 
-It presents Pi honestly as **Pi Coding Agent** while mapping Pi's native 4-tool workflow onto ACP in a way that renders well in Zed.
+It presents Pi honestly as **Pi Coding Agent** while mapping Pi's native 4-tool workflow onto ACP. Tested primarily with [Zed](https://zed.dev) as the reference client, but should be compatible with any ACP-compliant client that provides the required capabilities (`fs.readTextFile`, `fs.writeTextFile`, `terminal`).
 
 ## What this adapter does
 
@@ -12,18 +12,18 @@ It presents Pi honestly as **Pi Coding Agent** while mapping Pi's native 4-tool 
 - maps Pi tool calls to Zed-friendly ACP payloads
 - preserves structured tool output instead of flattening everything to text
 
-## Zed-facing behavior
+## Client-facing behavior
 
 ### Tool mapping
 
-| Pi tool | ACP kind  | Zed rendering goal | Notes                                                                          |
+| Pi tool | ACP kind  | Rendering goal     | Notes                                                                          |
 | ------- | --------- | ------------------ | ------------------------------------------------------------------------------ |
 | `read`  | `read`    | file/read card     | preserves text and image output, attaches file locations                       |
 | `edit`  | `edit`    | diff card          | emits ACP diff content and changed-line locations when available               |
 | `write` | `edit`    | diff/add card      | treated as a file mutation so Zed shows diff UI instead of a generic tool card |
 | `bash`  | `execute` | live terminal card | uses ACP terminals and keeps terminal metadata in `rawOutput`                  |
 
-### Session behavior
+### Session behavior (Zed reference)
 
 - `newSession` creates a Pi-backed persistent session
 - `loadSession` replays prior history through ACP updates
@@ -68,19 +68,7 @@ Client capability requirements:
 
 If an ACP client does not provide those capabilities, the adapter fails fast instead of pretending Pi can operate correctly.
 
-## Intentional non-goals
-
-This adapter does **not** try to turn Pi into Zed's built-in agent.
-
-It intentionally does not add or fake:
-
-- permission prompts
-- subagents
-- plan / ask / code modes
-- MCP support that Pi does not actually implement
-- a larger non-Pi tool catalog such as synthetic `grep`, `find`, or `spawn_agent`
-
-Zed is the reference client for UX, but Pi remains the reference product for behavior.
+Client-specific UX enhancements are driven by compatibility testing (Zed is the reference), but Pi's native behavior remains the source of truth.
 
 ## Development
 
@@ -118,29 +106,3 @@ Or, when installed as a package/binary:
 ```bash
 pi-acp
 ```
-
-The adapter communicates over stdio using ACP NDJSON streams.
-
-## Manual Zed validation checklist
-
-When validating in Zed, confirm:
-
-- agent identity shows as **Pi Coding Agent**
-- `read` tool calls show file locations and preserve image output
-- `edit` renders in Zed's diff UI
-- `write` renders as diff/add, not a generic tool card
-- `bash` renders as a live terminal card
-- session list / load / resume work against persisted Pi sessions
-- model and thinking-level config options behave correctly
-- Pi slash commands appear in the client and are accepted when invoked
-
-## Planning docs
-
-Implementation tracking lives in `plans/`:
-
-- `plans/progress.md`
-- `plans/phase-0-correctness-and-honesty.md`
-- `plans/phase-1-zed-tool-ui-alignment.md`
-- `plans/phase-2-terminal-integration.md`
-- `plans/phase-3-session-lifecycle.md`
-- `plans/phase-4-polish-and-compatibility.md`
