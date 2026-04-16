@@ -2,8 +2,9 @@
  * ACP Agent Runtime Factory
  *
  * Creates Pi AgentSessions configured for ACP protocol usage.
- * Pi's 4 core tools (read, write, edit, bash) are delegated to the ACP client
- * via filesystem and terminal methods instead of local process access.
+ * Read/write/edit are delegated through ACP filesystem methods. Bash prefers
+ * ACP terminals when available, but falls back to local process execution when
+ * the client does not advertise terminal support.
  */
 
 import { homedir } from "node:os";
@@ -34,6 +35,7 @@ import {
   AcpReadOperations,
   AcpWriteOperations,
   AcpTerminalOperations,
+  createLocalBashFallbackOperations,
   getAuthorizedRoots,
   type AcpClientInterface,
 } from "../adapter/AcpToolBridge.js";
@@ -316,6 +318,9 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
   const readTool = createReadToolDefinition(options.cwd, { operations: readOps });
 
   const bashToolBase = createBashToolDefinition(options.cwd);
+  const localBashToolDefinition = createBashToolDefinition(options.cwd, {
+    operations: createLocalBashFallbackOperations(),
+  });
   const bashTool: typeof bashToolBase = {
     ...bashToolBase,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -323,6 +328,10 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
         toolName: "bash",
         rawInput: params,
       });
+
+      if (!options.clientCapabilities.supportsTerminal) {
+        return localBashToolDefinition.execute(toolCallId, params, signal, onUpdate, ctx);
+      }
 
       let emittedTerminalUpdate = false;
       let terminalSnapshot:

@@ -45,6 +45,7 @@ import { SessionManager, type ModelRegistry } from "@mariozechner/pi-coding-agen
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 
 import type {
+  AcpBashTerminalRawOutput,
   AcpClientCapabilitiesSnapshot,
   AcpSessionState,
   AcpSessionUsageSnapshot,
@@ -253,23 +254,27 @@ function extractFirstChangedLine(result: unknown): number | undefined {
   return typeof details?.firstChangedLine === "number" ? details.firstChangedLine : undefined;
 }
 
+function isAcpTerminalRawOutput(value: unknown): value is AcpBashTerminalRawOutput {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "acp_terminal"
+  );
+}
+
 function mergeCapturedRawOutput(
   toolCallState: AcpToolCallState | undefined,
   nextValue: unknown,
   phase: "update" | "end",
 ): unknown {
-  if (!toolCallState?.rawOutput || typeof toolCallState.rawOutput !== "object") {
+  if (toolCallState?.toolName !== "bash" || !isAcpTerminalRawOutput(toolCallState?.rawOutput)) {
     return nextValue;
   }
 
-  if (toolCallState.toolName !== "bash") {
-    return nextValue;
-  }
+  const rawOutputRecord = toolCallState.rawOutput;
 
-  const rawOutputRecord = toolCallState.rawOutput as Record<string, unknown>;
-
-  // For bash commands, when the command ends, populate piPartialResult.content
-  // with the actual terminal output from rawOutput.output
+  // For ACP-terminal-backed bash commands, when the command ends, populate
+  // piPartialResult.content with the actual terminal output from rawOutput.output.
   if (phase === "end") {
     const terminalOutput = typeof rawOutputRecord.output === "string" ? rawOutputRecord.output : "";
     const piPartialResult = {

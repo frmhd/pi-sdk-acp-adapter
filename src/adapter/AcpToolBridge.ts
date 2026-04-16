@@ -2,12 +2,13 @@
  * ACP Tool Bridge
  *
  * Bridges Pi's 4 core tools (read, write, edit, bash) to ACP client methods.
- * File operations are delegated through ACP filesystem requests and command
- * execution is delegated through ACP terminals.
+ * File operations are delegated through ACP filesystem requests. Bash prefers
+ * ACP terminals, but can fall back to local child_process execution when the
+ * client does not advertise terminal support.
  */
 
 import { constants } from "node:fs";
-import { access as fsAccess, readFile as fsReadFile } from "node:fs/promises";
+import { access as fsAccess, mkdir as fsMkdir, readFile as fsReadFile } from "node:fs/promises";
 import { resolve as resolvePath, sep } from "node:path";
 
 import type {
@@ -19,6 +20,7 @@ import type {
 
 import {
   DEFAULT_MAX_BYTES,
+  createLocalBashOperations,
   type BashOperations,
   type ReadOperations,
   type WriteOperations,
@@ -135,6 +137,37 @@ export function assertPathAuthorized(
   throw new Error(
     `ACP ${operation} denied for path ${JSON.stringify(path)}. Allowed workspace roots: ${authorizedRoots.join(", ")}. Filesystem access is limited to the session cwd and additionalDirectories.`,
   );
+}
+
+// =============================================================================
+// Bash Execution Helpers
+// =============================================================================
+
+const PAGER_DISABLING_ENV: NodeJS.ProcessEnv = {
+  PAGER: "cat",
+  GH_PAGER: "cat",
+  GIT_PAGER: "cat",
+};
+
+function buildNonInteractiveShellEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...PAGER_DISABLING_ENV,
+    ...env,
+  };
+}
+
+/** Local child_process-backed BashOperations used when ACP terminal is unavailable. */
+export function createLocalBashFallbackOperations(): BashOperations {
+  const localBash = createLocalBashOperations();
+
+  return {
+    exec(command, cwd, options) {
+      return localBash.exec(command, cwd, {
+        ...options,
+        env: buildNonInteractiveShellEnv(options.env),
+      });
+    },
+  };
 }
 
 // =============================================================================
@@ -278,18 +311,9 @@ export class AcpTerminalOperations implements BashOperations {
       throw new Error("ACP client does not support terminal/create.");
     }
 
-    // Build environment variables, injecting pager-disabling vars to prevent
-    // interactive pagers (like less) from hanging the terminal
-    const pagerDisablingEnv: NodeJS.ProcessEnv = {
-      PAGER: "cat",
-      GH_PAGER: "cat",
-      GIT_PAGER: "cat",
-    };
-
-    const mergedEnv: NodeJS.ProcessEnv = {
-      ...pagerDisablingEnv,
-      ...options.env,
-    };
+    // Inject pager-disabling vars to prevent interactive pagers (like less)
+    // from hanging ACP-backed or locally-fallbacked shell execution.
+    const mergedEnv = buildNonInteractiveShellEnv(options.env);
 
     const env: EnvVariable[] | undefined = Object.entries(mergedEnv)
       .filter(([, value]) => value !== undefined)
@@ -531,7 +555,8 @@ export class AcpWriteOperations implements WriteOperations {
     assertPathAuthorized(dir, this.authorizedRoots, "create directory");
 
     if (!this.client.capabilities.supportsTerminal) {
-      throw new Error("ACP client does not support terminal/create.");
+      await fsMkdir(dir, { recursive: true });
+      return;
     }
 
     const mkdirRequest = createMkdirTerminalRequest(dir);
@@ -593,7 +618,7 @@ export class AcpEditOperations {
 export class AcpToolBridge {
   private client: AcpClientInterface;
   private authorization: AcpPathAuthorizationOptions;
-  private terminalOps?: AcpTerminalOperations;
+  private bashOps?: BashOperations;
   private readOps?: AcpReadOperations;
   private writeOps?: AcpWriteOperations;
   private editOps?: AcpEditOperations;
@@ -604,10 +629,12 @@ export class AcpToolBridge {
   }
 
   getBashOperations(): BashOperations | undefined {
-    if (!this.terminalOps) {
-      this.terminalOps = new AcpTerminalOperations(this.client);
+    if (!this.bashOps) {
+      this.bashOps = this.client.capabilities.supportsTerminal
+        ? new AcpTerminalOperations(this.client)
+        : createLocalBashFallbackOperations();
     }
-    return this.terminalOps;
+    return this.bashOps;
   }
 
   getReadOperations(): ReadOperations | undefined {

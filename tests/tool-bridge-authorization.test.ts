@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -127,5 +127,21 @@ describe("ACP tool bridge path authorization", () => {
 
     await expect(writeOps.mkdir("/workspace/shared/generated")).resolves.toBeUndefined();
     await expect(writeOps.mkdir("/tmp/generated")).rejects.toThrow(/ACP create directory denied/i);
+  });
+
+  test("falls back to local mkdir when terminal support is unavailable", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-acp-mkdir-"));
+    tempDirs.push(root);
+
+    const client = createMockClient();
+    client.capabilities.supportsTerminal = false;
+
+    const targetDir = join(root, "nested", "generated");
+    const writeOps = new AcpWriteOperations(client, { authorizedRoots: [root] });
+
+    await expect(writeOps.mkdir(targetDir)).resolves.toBeUndefined();
+    const stats = await stat(targetDir);
+    expect(stats.isDirectory()).toBe(true);
+    expect(client.createTerminal).not.toHaveBeenCalled();
   });
 });

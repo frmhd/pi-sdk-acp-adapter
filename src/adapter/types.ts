@@ -178,7 +178,12 @@ export function captureClientCapabilities(
   };
 }
 
-/** Get the list of ACP client capabilities required for Pi's 4-tool surface. */
+/**
+ * Get the list of ACP client capabilities strictly required by the adapter.
+ *
+ * `terminal` is intentionally optional: when it is unavailable, bash tool calls
+ * fall back to local command execution instead of ACP terminal embedding.
+ */
 export function getMissingRequiredClientCapabilities(
   capabilities: AcpClientCapabilitiesSnapshot,
 ): string[] {
@@ -190,10 +195,6 @@ export function getMissingRequiredClientCapabilities(
 
   if (!capabilities.supportsWriteTextFile) {
     missing.push("fs.writeTextFile");
-  }
-
-  if (!capabilities.supportsTerminal) {
-    missing.push("terminal");
   }
 
   return missing;
