@@ -1,6 +1,7 @@
-# pi-sdk-acp-adapter
+# @frmhd/pi-sdk-acp-adapter
 
-[![npm version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://www.npmjs.com/package/pi-sdk-acp-adapter)
+[![npm version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://www.npmjs.com/package/@frmhd/pi-sdk-acp-adapter)
+[![npm downloads](https://img.shields.io/npm/dm/@frmhd/pi-sdk-acp-adapter.svg)](https://www.npmjs.com/package/@frmhd/pi-sdk-acp-adapter)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Vite+](https://img.shields.io/badge/built%20with-Vite+-646cff.svg)](https://github.com/voidzero-dev/vite-plus)
 
@@ -40,28 +41,23 @@ Designed with a focus on [Zed](https://zed.dev) as the primary reference client,
 
 ## Quick Start
 
-### Prerequisites
+Configure your ACP client to use the adapter:
 
-- Node.js environment
-- [Vite+](https://github.com/voidzero-dev/vite-plus) installed (`npm i -g vite-plus`)
+#### Using npx
 
-### Installation
-
-Clone the repository and install dependencies:
-
-```bash
-vp install
+```json
+{
+  "agent_servers": {
+    "Pi": {
+      "type": "custom",
+      "command": "npx",
+      "args": ["@frmhd/pi-sdk-acp-adapter"]
+    }
+  }
+}
 ```
 
-Build the project:
-
-```bash
-vp pack
-```
-
-### Usage
-
-Configure your ACP client (e.g., Zed `settings.json`) to use the built executable:
+#### From local source (development)
 
 ```json
 {
@@ -71,20 +67,6 @@ Configure your ACP client (e.g., Zed `settings.json`) to use the built executabl
       "command": "node",
       "args": ["/absolute/path/to/pi-sdk-acp-adapter/dist/cli.mjs"],
       "env": {}
-    }
-  }
-}
-```
-
-Or, if installed globally:
-
-```json
-{
-  "agent_servers": {
-    "pi": {
-      "type": "custom",
-      "command": "pi-acp",
-      "args": []
     }
   }
 }
@@ -102,7 +84,42 @@ The adapter safely degrades based on the capabilities advertised by your client 
 
 ## Development
 
-This project uses Vite+ for toolchain management.
+### Prerequisites
+
+- Node.js environment
+- [Vite+](https://github.com/voidzero-dev/vite-plus) installed (`npm i -g vite-plus`)
+
+### Local Setup
+
+Clone the repository and install dependencies:
+
+```bash
+git clone https://github.com/frmhd/pi-sdk-acp-adapter.git
+cd pi-sdk-acp-adapter
+vp install
+```
+
+Build the project:
+
+```bash
+vp pack
+```
+
+Use the local build in your ACP client config:
+
+```json
+{
+  "agent_servers": {
+    "pi": {
+      "type": "custom",
+      "command": "node",
+      "args": ["/absolute/path/to/pi-sdk-acp-adapter/dist/cli.mjs"]
+    }
+  }
+}
+```
+
+### Development Commands
 
 - **Check Types & Lint**: `vp check`
 - **Run Tests**: `vp test`
