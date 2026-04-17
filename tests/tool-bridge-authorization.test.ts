@@ -99,6 +99,44 @@ describe("ACP tool bridge path authorization", () => {
     );
   });
 
+  test("can read external paths outside authorizedRoots via local fallback", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-acp-external-"));
+    tempDirs.push(root);
+
+    const cwd = join(root, "project");
+    const external = join(root, "external");
+    await mkdir(cwd, { recursive: true });
+    await mkdir(external, { recursive: true });
+
+    const cwdFile = join(cwd, "inside.txt");
+    const externalFile = join(external, "outside.txt");
+    await writeFile(cwdFile, "inside-local", "utf-8");
+    await writeFile(externalFile, "external-content", "utf-8");
+
+    const client = createMockClient();
+    // authorizedRoots only includes cwd, NOT external
+    const readOps = new HybridReadOperations(client, {
+      authorizedRoots: getAuthorizedRoots(cwd, []),
+      acpReadRoots: getAuthorizedRoots(cwd),
+    });
+
+    // File in cwd uses ACP
+    await expect(readOps.readFile(cwdFile)).resolves.toEqual(
+      Buffer.from(`read:${cwdFile}`, "utf-8"),
+    );
+
+    // File outside authorizedRoots falls back to local
+    await expect(readOps.readFile(externalFile)).resolves.toEqual(
+      Buffer.from("external-content", "utf-8"),
+    );
+
+    expect(client.readTextFile).toHaveBeenCalledWith(expect.objectContaining({ path: cwdFile }));
+    // ACP should not be called for external paths
+    expect(client.readTextFile).not.toHaveBeenCalledWith(
+      expect.objectContaining({ path: externalFile }),
+    );
+  });
+
   test("allows writes in cwd and additionalDirectories only", async () => {
     const client = createMockClient();
     const authorizedRoots = getAuthorizedRoots("/workspace/project", ["/workspace/shared"]);

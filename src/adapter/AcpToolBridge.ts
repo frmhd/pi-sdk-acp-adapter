@@ -158,19 +158,28 @@ export function shouldBypassAcpRead(
   options: AcpReadFallbackPolicyOptions,
 ): boolean {
   const authorizedRoots = options.authorizedRoots ?? [];
-  assertPathAuthorized(absolutePath, authorizedRoots, "read");
-
   const alwaysLocalRoots = options.alwaysLocalRoots ?? [];
+  const acpReadRoots = options.acpReadRoots ?? authorizedRoots;
+
+  // If path is in alwaysLocalRoots, bypass ACP and read locally
   if (alwaysLocalRoots.length > 0 && isPathWithinAuthorizedRoots(absolutePath, alwaysLocalRoots)) {
     return true;
   }
 
-  const acpReadRoots = options.acpReadRoots ?? authorizedRoots;
-  if (acpReadRoots.length === 0) {
+  // If path is in acpReadRoots, use ACP
+  if (acpReadRoots.length === 0 || isPathWithinAuthorizedRoots(absolutePath, acpReadRoots)) {
     return false;
   }
 
-  return !isPathWithinAuthorizedRoots(absolutePath, acpReadRoots);
+  // Path is not in acpReadRoots - if it's within authorizedRoots, bypass ACP
+  // If authorizedRoots is empty (allow all) or path is within authorizedRoots, use local
+  if (authorizedRoots.length === 0 || isPathWithinAuthorizedRoots(absolutePath, authorizedRoots)) {
+    return true;
+  }
+
+  // Path is outside all defined roots - for security, use local reads
+  // (External paths cannot be read via ACP, only locally)
+  return true;
 }
 
 const LOCAL_IMAGE_MIME_TYPES: Record<string, string> = {
@@ -585,6 +594,7 @@ export class AcpReadOperations implements ReadOperations {
 /** Mixed read operations: ACP within ACP-visible roots, local elsewhere. */
 export class HybridReadOperations implements ReadOperations {
   private readonly localReadOps: ReadOperations;
+  private readonly unrestrictedLocalReadOps: ReadOperations;
   private readonly acpReadOps: AcpReadOperations;
   private readonly policy: AcpReadFallbackPolicyOptions;
 
@@ -596,15 +606,29 @@ export class HybridReadOperations implements ReadOperations {
     }),
   ) {
     this.localReadOps = localReadOps;
+    // Unrestricted local reads for external paths (OS permissions apply)
+    this.unrestrictedLocalReadOps = createLocalReadOperations({ authorizedRoots: [] });
     this.acpReadOps = new AcpReadOperations(client, {
       authorizedRoots: options.authorizedRoots,
     });
     this.policy = options;
   }
 
+  private getLocalReadOpsForPath(absolutePath: string): ReadOperations {
+    const authorizedRoots = this.policy.authorizedRoots ?? [];
+    // Use restricted local ops for paths within authorizedRoots, unrestricted for external paths
+    if (
+      authorizedRoots.length === 0 ||
+      isPathWithinAuthorizedRoots(absolutePath, authorizedRoots)
+    ) {
+      return this.localReadOps;
+    }
+    return this.unrestrictedLocalReadOps;
+  }
+
   async readFile(absolutePath: string): Promise<Buffer> {
     if (shouldBypassAcpRead(absolutePath, this.policy)) {
-      return this.localReadOps.readFile(absolutePath);
+      return this.getLocalReadOpsForPath(absolutePath).readFile(absolutePath);
     }
 
     return this.acpReadOps.readFile(absolutePath);
@@ -612,7 +636,7 @@ export class HybridReadOperations implements ReadOperations {
 
   async access(absolutePath: string): Promise<void> {
     if (shouldBypassAcpRead(absolutePath, this.policy)) {
-      return this.localReadOps.access(absolutePath);
+      return this.getLocalReadOpsForPath(absolutePath).access(absolutePath);
     }
 
     return this.acpReadOps.access(absolutePath);
@@ -620,7 +644,7 @@ export class HybridReadOperations implements ReadOperations {
 
   async detectImageMimeType(absolutePath: string): Promise<string | null | undefined> {
     if (shouldBypassAcpRead(absolutePath, this.policy)) {
-      return this.localReadOps.detectImageMimeType?.(absolutePath);
+      return this.getLocalReadOpsForPath(absolutePath).detectImageMimeType?.(absolutePath);
     }
 
     return undefined;

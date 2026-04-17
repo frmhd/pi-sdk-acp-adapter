@@ -3,7 +3,7 @@ import { isAbsolute, resolve as resolvePath } from "node:path";
 
 import type { AgentSideConnection } from "@agentclientprotocol/sdk";
 
-import { assertPathAuthorized, getAuthorizedRoots, shouldBypassAcpRead } from "./AcpToolBridge.js";
+import { getAuthorizedRoots, shouldBypassAcpRead } from "./AcpToolBridge.js";
 import type { AcpClientCapabilitiesSnapshot } from "./types.js";
 
 export interface ResolvePromptPathsOptions {
@@ -38,8 +38,9 @@ export async function resolvePromptPathsInText(
 
     try {
       const fullPath = isAbsolute(path) ? path : resolvePath(options.cwd, path);
-      assertPathAuthorized(fullPath, authorizedRoots, "read");
 
+      // Determine whether to read locally or via ACP
+      // External paths (outside authorizedRoots) are read locally
       const shouldReadLocally =
         !options.clientCapabilities.supportsReadTextFile ||
         shouldBypassAcpRead(fullPath, {
