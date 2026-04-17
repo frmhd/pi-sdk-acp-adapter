@@ -10,7 +10,7 @@ An ACP (Agent Client Protocol) adapter for the [Pi Coding Agent](https://github.
 
 This adapter extends Pi's capabilities by mapping its internal `read`, `edit`, `write`, and `bash` tools to native ACP operations. This allows your IDE to handle diffs, terminal execution, and file modifications directly, providing a fully integrated and secure experience while preserving Pi's session state.
 
-<!-- [Placeholder: Animated GIF or VHS recording showing Pi executing a bash command or editing a file inside Zed's native UI] -->
+[pi-sdk-demo](https://github.com/user-attachments/assets/f6cc726e-2bc9-49c4-a9b4-6cc9488de629)
 
 ## Table of Contents
 
