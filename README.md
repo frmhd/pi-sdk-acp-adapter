@@ -1,132 +1,113 @@
 # pi-sdk-acp-adapter
 
-ACP adapter for [Pi Coding Agent](https://github.com/badlogic/pi-mono) implementing the Agent Communication Protocol (ACP).
+[![npm version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://www.npmjs.com/package/pi-sdk-acp-adapter)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Vite+](https://img.shields.io/badge/built%20with-Vite+-646cff.svg)](https://github.com/voidzero-dev/vite-plus)
 
-It presents Pi honestly as **Pi Coding Agent** while mapping Pi's native 4-tool workflow onto ACP. Tested primarily with [Zed](https://zed.dev) as the reference client. Tool backends are selected per client/session from the ACP capabilities the client advertises: ACP-backed where available, local Pi backends otherwise. When `terminal` is unavailable, bash falls back to local execution.
+An ACP (Agent Client Protocol) adapter for the [Pi Coding Agent](https://github.com/badlogic/pi-mono), enabling native IDE filesystem and terminal delegation.
 
-## What this adapter does
+## Overview
 
-- speaks ACP over stdio
-- exposes Pi as `pi` / `Pi Coding Agent`
-- backs ACP sessions with Pi `SessionManager` persistence
-- maps Pi tool calls to Zed-friendly ACP payloads
-- preserves structured tool output instead of flattening everything to text
+This adapter extends Pi's capabilities by mapping its internal `read`, `edit`, `write`, and `bash` tools to native ACP operations. This allows your IDE to handle diffs, terminal execution, and file modifications directly, providing a fully integrated and secure experience while preserving Pi's session state.
 
-## Client-facing behavior
+<!-- [Placeholder: Animated GIF or VHS recording showing Pi executing a bash command or editing a file inside Zed's native UI] -->
 
-### Tool mapping
+## Table of Contents
 
-| Pi tool | ACP kind  | Rendering goal                   | Notes                                                                                                                          |
-| ------- | --------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `read`  | `read`    | file/read card                   | preserves text and image output, attaches file locations                                                                       |
-| `edit`  | `edit`    | diff card                        | emits ACP diff content and changed-line locations when available                                                               |
-| `write` | `edit`    | diff/add card                    | treated as a file mutation so Zed shows diff UI instead of a generic tool card                                                 |
-| `bash`  | `execute` | live terminal card / text output | prefers ACP terminals and keeps terminal metadata in `rawOutput`; falls back to local execution when terminals are unavailable |
+- [Features](#features)
+- [Client Compatibility](#client-compatibility)
+- [Quick Start](#quick-start)
+- [Architecture & Fallbacks](#architecture--fallbacks)
+- [Development](#development)
 
-### Session behavior (Zed reference)
+## Features
 
-- `newSession` creates a Pi-backed persistent session
-- `loadSession` replays prior history through ACP updates
-- `unstable_resumeSession` resumes without replay
-- `unstable_listSessions` lists persisted Pi sessions
-- `session_info_update` keeps title and `updatedAt` in sync
-- `available_commands_update` advertises Pi slash commands (extensions, prompt templates, skills)
+- **Native Filesystem Delegation**: Maps Pi's `write` and `edit` tools to ACP, rendering real side-by-side diffs in supported editors.
+- **Native Terminal Execution**: Maps Pi's `bash` tool to ACP terminals, providing live ANSI output, persistent processes, and native UI controls.
+- **Interactive Terminal Auth**: Exposes Pi's OAuth flows seamlessly within your IDE's terminal for seamless authentication.
+- **Context Window Tracking (Zed)**: Includes a specialized configuration option that displays real-time context usage and token counts directly in the Zed session panel.
 
-### Payload conventions used for compatibility
+## Client Compatibility
 
-- `_meta.tool_name` is populated for tool calls and tool call updates
-- file-targeting tools include `locations` whenever a path is known
-- `rawInput` keeps the original Pi tool arguments
-- `rawOutput` keeps the final Pi payload, plus ACP terminal metadata for `bash`
-- structured tool content is preserved for text, images, resource links, and embedded resources when available
+Designed with a focus on [Zed](https://zed.dev) as the primary reference client, but built to strictly adhere to the ACP specification for broad compatibility.
 
-## Supported ACP surface
+| Client                | Status       | Notes                                                                 |
+| :-------------------- | :----------- | :-------------------------------------------------------------------- |
+| **Zed**               | 🏆 Reference | Full support for diffs, terminals, auth, and token tracking.          |
+| **WebStorm**          | ✅ Supported | Full support.                                                         |
+| **Obsidian**          | ✅ Supported | Works seamlessly via the Agent Client plugin for knowledge bases.     |
+| **Other ACP Clients** | ⚠️ Untested  | Should work with any ACP-compliant client, but not explicitly tested. |
 
-Implemented and intentionally supported:
+## Quick Start
 
-- `initialize`
-- `authenticate` (ACP terminal auth for Pi OAuth providers when the client advertises `auth.terminal`)
-- `session/new`
-- `session/load`
-- `session/prompt`
-- `session/cancel`
-- `session/set_config_option`
-- `session/list` (`unstable_listSessions`)
-- `session/resume` (`unstable_resumeSession`)
-- `session/close` (`unstable_closeSession`)
-- `session/update` notifications, including:
-  - assistant message chunks
-  - thought chunks
-  - tool calls / tool call updates
-  - session info updates
-  - available commands updates
+### Prerequisites
 
-Client capability handling:
+- Node.js environment
+- [Vite+](https://github.com/voidzero-dev/vite-plus) installed (`npm i -g vite-plus`)
 
-- `fs.readTextFile` — optional; when present, `read` prefers ACP with intentional local fallback for authorized paths outside ACP-visible roots
-- `fs.writeTextFile` — optional; when present, `write` uses ACP-backed writes
-- `terminal` — optional; when present, `bash` uses ACP terminal embedding
+### Installation
 
-Optional client auth capability:
-
-- `auth.terminal` — enables ACP terminal auth methods for Pi's built-in OAuth providers
-
-Backend selection rules in the current first pass:
-
-| Tool    | Selected backend                                                                                          |
-| ------- | --------------------------------------------------------------------------------------------------------- |
-| `read`  | ACP-backed mixed read when `fs.readTextFile` is available, else local Pi read                             |
-| `write` | ACP-backed write when `fs.writeTextFile` is available, else local Pi write                                |
-| `edit`  | ACP-backed edit only when both `fs.readTextFile` and `fs.writeTextFile` are available, else local Pi edit |
-| `bash`  | ACP terminal-backed bash when `terminal` is available, else local Pi bash                                 |
-
-This means missing ACP filesystem/terminal capabilities do **not** block initialization or session creation. The adapter stays ACP-compliant by only calling ACP methods the client actually advertised, while preserving Pi behavior through local tool backends where needed.
-
-Client-specific UX enhancements are driven by compatibility testing (Zed is the reference), but Pi's native behavior remains the source of truth.
-
-## Development
-
-This project uses Vite+.
-
-### Install
+Clone the repository and install dependencies:
 
 ```bash
 vp install
 ```
 
-### Validate
-
-```bash
-vp check
-vp test
-```
-
-### Build
+Build the project:
 
 ```bash
 vp pack
 ```
 
-## Running the adapter
+### Usage
 
-After building:
+Configure your ACP client (e.g., Zed `settings.json`) to use the built executable:
 
-```bash
-node dist/cli.mjs
+```json
+{
+  "agent_servers": {
+    "pi": {
+      "type": "custom",
+      "command": "node",
+      "args": ["/absolute/path/to/pi-sdk-acp-adapter/dist/cli.mjs"],
+      "env": {}
+    }
+  }
+}
 ```
 
-Or, when installed as a package/binary:
+Or, if installed globally:
 
-```bash
-pi-acp
+```json
+{
+  "agent_servers": {
+    "pi": {
+      "type": "custom",
+      "command": "pi-acp",
+      "args": []
+    }
+  }
+}
 ```
 
-## Terminal auth mode
+## Architecture & Fallbacks
 
-When an ACP client advertises `auth.terminal`, the adapter now exposes ACP terminal auth methods for Pi's built-in OAuth providers. Those methods re-run the same `pi-acp` binary with an internal flag:
+The adapter safely degrades based on the capabilities advertised by your client during the ACP `initialize` handshake.
 
-```bash
-pi-acp --acp-terminal-auth anthropic
-```
+| Pi Tool          | When Client Supports ACP Capabilities | Fallback (No Client Support) |
+| :--------------- | :------------------------------------ | :--------------------------- |
+| `read` / `write` | Delegated to Editor FS                | Pi Local Execution           |
+| `edit`           | Native Editor Diff UI                 | Pi Local Edit                |
+| `bash`           | Editor Integrated Terminal            | Pi Local Shell               |
 
-That interactive flow stores credentials in Pi's standard auth store (`~/.pi/agent/auth.json`).
+## Development
+
+This project uses Vite+ for toolchain management.
+
+- **Check Types & Lint**: `vp check`
+- **Run Tests**: `vp test`
+- **Watch Mode**: `vp run dev`
+
+---
+
+_MIT Licensed._
