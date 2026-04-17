@@ -11,8 +11,6 @@
  * - Handles session configuration (model selection, thinking level)
  */
 
-import { isAbsolute, resolve as resolvePath } from "node:path";
-
 import type { Agent, AgentSideConnection } from "@agentclientprotocol/sdk";
 
 import type {
@@ -68,11 +66,7 @@ import {
   replaySessionHistory,
 } from "./AcpSessionLifecycle.js";
 
-import {
-  captureClientCapabilities,
-  createMissingClientCapabilitiesMessage,
-  getMissingRequiredClientCapabilities,
-} from "./types.js";
+import { captureClientCapabilities } from "./types.js";
 
 import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
 
@@ -84,7 +78,7 @@ import {
   handleSetSessionConfigOption,
   buildSetSessionConfigOptionResponse,
 } from "./AcpSessionConfig.js";
-import { assertPathAuthorized, getAuthorizedRoots } from "./AcpToolBridge.js";
+import { resolvePromptPathsInText } from "./resolvePromptPaths.js";
 
 import type { CreateAcpAgentRuntimeOptions } from "../runtime/AcpAgentRuntime.js";
 import { ACP_AGENT_NAME, ACP_AGENT_TITLE, ADAPTER_VERSION } from "../packageMetadata.js";
@@ -145,54 +139,6 @@ function extractContentFromBlocks(blocks: ContentBlock[]): ExtractedContent {
     text: textParts.join("\n\n"),
     images,
   };
-}
-
-/**
- * Resolve @path patterns in text by reading file contents via ACP.
- *
- * Looks for @path (optionally quoted or in backticks) and replaces it with:
- * --- @path ---
- * <content>
- */
-async function resolvePathsInText(
-  text: string,
-  cwd: string,
-  additionalDirectories: string[],
-  connection: AgentSideConnection,
-  sessionId: string,
-): Promise<string> {
-  const pathRegex = /(?:^|\s)@(?:["']([^"']+)["']|`([^`]+)`|([^\s]+))/g;
-  let resolvedText = text;
-  const matches = Array.from(text.matchAll(pathRegex));
-
-  // Process matches in reverse order to keep indices valid
-  for (let i = matches.length - 1; i >= 0; i--) {
-    const match = matches[i];
-    const path = match[1] || match[2] || match[3];
-
-    try {
-      // Resolve path relative to cwd if it's not absolute, then enforce the
-      // ACP session filesystem scope before reading it.
-      const fullPath = isAbsolute(path) ? path : resolvePath(cwd, path);
-      assertPathAuthorized(fullPath, getAuthorizedRoots(cwd, additionalDirectories), "read");
-
-      const { content } = await connection.readTextFile({
-        path: fullPath,
-        sessionId,
-      });
-
-      const replacement = `\n\n--- @${path} ---\n${content}\n`;
-      resolvedText =
-        resolvedText.slice(0, match.index) +
-        match[0].replace(`@${path}`, replacement) +
-        resolvedText.slice(match.index + match[0].length);
-    } catch (error) {
-      console.warn(`Failed to resolve path @${path}:`, error);
-      // Keep @path as-is if resolution fails
-    }
-  }
-
-  return resolvedText;
 }
 
 function getOrCreateToolCallState(
@@ -397,11 +343,6 @@ export class AcpAgent implements Agent {
       params.clientInfo,
     );
 
-    const missingCapabilities = getMissingRequiredClientCapabilities(this.clientCapabilities);
-    if (missingCapabilities.length > 0) {
-      throw new Error(createMissingClientCapabilitiesMessage(missingCapabilities));
-    }
-
     return {
       protocolVersion: PROTOCOL_VERSION,
       agentInfo: {
@@ -579,13 +520,14 @@ export class AcpAgent implements Agent {
     }
 
     // Resolve @path patterns (Gemini CLI feature parity)
-    const userText = await resolvePathsInText(
-      rawUserText,
-      sessionState.cwd,
-      sessionState.additionalDirectories,
-      this.connection,
-      params.sessionId,
-    );
+    const userText = await resolvePromptPathsInText({
+      text: rawUserText,
+      cwd: sessionState.cwd,
+      additionalDirectories: sessionState.additionalDirectories,
+      connection: this.connection,
+      sessionId: params.sessionId,
+      clientCapabilities: this.clientCapabilities,
+    });
 
     // Subscribe to Pi events and forward to ACP connection.
     // AgentSession listeners are synchronous, so we serialize ACP notifications
@@ -1098,11 +1040,6 @@ export class AcpAgent implements Agent {
   private assertReadyForSessions(): void {
     if (!this.initialized) {
       throw new Error("ACP initialize() must complete before creating Pi sessions.");
-    }
-
-    const missingCapabilities = getMissingRequiredClientCapabilities(this.clientCapabilities);
-    if (missingCapabilities.length > 0) {
-      throw new Error(createMissingClientCapabilitiesMessage(missingCapabilities));
     }
   }
 }

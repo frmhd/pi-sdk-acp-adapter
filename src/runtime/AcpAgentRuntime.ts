@@ -2,9 +2,8 @@
  * ACP Agent Runtime Factory
  *
  * Creates Pi AgentSessions configured for ACP protocol usage.
- * Read/write/edit are delegated through ACP filesystem methods. Bash prefers
- * ACP terminals when available, but falls back to local process execution when
- * the client does not advertise terminal support.
+ * Tool backends are selected per session from the connected client's advertised
+ * capabilities: ACP-backed where available, local Pi tool backends otherwise.
  */
 
 import { homedir } from "node:os";
@@ -32,10 +31,13 @@ import {
 } from "@mariozechner/pi-coding-agent";
 
 import {
-  AcpReadOperations,
-  AcpWriteOperations,
   AcpTerminalOperations,
+  AcpWriteOperations,
+  HybridReadOperations,
   createLocalBashFallbackOperations,
+  createLocalEditOperations,
+  createLocalReadOperations,
+  createLocalWriteOperations,
   getAuthorizedRoots,
   type AcpClientInterface,
 } from "../adapter/AcpToolBridge.js";
@@ -44,8 +46,6 @@ import {
   type AcpBashTerminalRawOutput,
   type AcpClientCapabilitiesSnapshot,
   type AcpToolCallState,
-  createMissingClientCapabilitiesMessage,
-  getMissingRequiredClientCapabilities,
 } from "../adapter/types.js";
 
 // =============================================================================
@@ -146,6 +146,23 @@ export interface CreateAcpAgentRuntimeOptions {
   onToolCallStateCaptured?: (toolCallId: string, update: Partial<AcpToolCallState>) => void;
 }
 
+type ToolBackend = "acp" | "local" | "hybrid";
+
+interface MutationToolTracking {
+  activeMutationToolCalls: Map<string, string>;
+  mutationToolProgressUpdates: Map<string, () => void>;
+  editContents: Map<string, string>;
+  emitMutationToolProgressUpdate: (toolCallId: string | undefined) => void;
+}
+
+interface BuildAcpSessionToolsOptions {
+  cwd: string;
+  additionalDirectories: string[];
+  acpClient: AcpClientInterface;
+  clientCapabilities: AcpClientCapabilitiesSnapshot;
+  onToolCallStateCaptured?: (toolCallId: string, update: Partial<AcpToolCallState>) => void;
+}
+
 // =============================================================================
 // Path Helpers
 // =============================================================================
@@ -182,6 +199,31 @@ function trackMutationToolCall<T>(
   });
 }
 
+function createMutationToolTracking(): MutationToolTracking {
+  const activeMutationToolCalls = new Map<string, string>();
+  const mutationToolProgressUpdates = new Map<string, () => void>();
+  const editContents = new Map<string, string>();
+
+  return {
+    activeMutationToolCalls,
+    mutationToolProgressUpdates,
+    editContents,
+    emitMutationToolProgressUpdate(toolCallId) {
+      if (!toolCallId) {
+        return;
+      }
+
+      const emit = mutationToolProgressUpdates.get(toolCallId);
+      if (!emit) {
+        return;
+      }
+
+      mutationToolProgressUpdates.delete(toolCallId);
+      emit();
+    },
+  };
+}
+
 function buildBashRawOutput(
   input: { command: string; timeout?: number },
   terminal: {
@@ -211,6 +253,396 @@ function buildBashRawOutput(
   };
 }
 
+function markToolBackend<T extends object>(
+  tool: T,
+  backend: ToolBackend,
+): T & {
+  acpBackend: ToolBackend;
+} {
+  return Object.assign(tool, { acpBackend: backend });
+}
+
+// =============================================================================
+// Base Tool Factories
+// =============================================================================
+
+function createAcpReadBaseTool(cwd: string, operations: ReadOperations) {
+  return markToolBackend(createReadToolDefinition(cwd, { operations }), "hybrid");
+}
+
+function createLocalReadBaseTool(cwd: string, operations: ReadOperations) {
+  return markToolBackend(createReadToolDefinition(cwd, { operations }), "local");
+}
+
+function createAcpWriteBaseTool(cwd: string, operations: WriteOperations) {
+  return markToolBackend(createWriteToolDefinition(cwd, { operations }), "acp");
+}
+
+function createLocalWriteBaseTool(cwd: string, operations: WriteOperations) {
+  return markToolBackend(createWriteToolDefinition(cwd, { operations }), "local");
+}
+
+function createAcpEditBaseTool(cwd: string, operations: EditOperations) {
+  return markToolBackend(createEditToolDefinition(cwd, { operations }), "acp");
+}
+
+function createLocalEditBaseTool(cwd: string, operations: EditOperations) {
+  return markToolBackend(createEditToolDefinition(cwd, { operations }), "local");
+}
+
+function createAcpBashBaseTool(cwd: string, operations: AcpTerminalOperations) {
+  return markToolBackend(createBashToolDefinition(cwd, { operations }), "acp");
+}
+
+function createLocalBashBaseTool(cwd: string) {
+  return markToolBackend(
+    createBashToolDefinition(cwd, { operations: createLocalBashFallbackOperations() }),
+    "local",
+  );
+}
+
+// =============================================================================
+// ACP Wrapper Factories
+// =============================================================================
+
+function wrapWriteForAcp(options: {
+  cwd: string;
+  backend: Extract<ToolBackend, "acp" | "local">;
+  readOps: ReadOperations;
+  baseWriteOps: WriteOperations;
+  tracking: MutationToolTracking;
+  onToolCallStateCaptured?: (toolCallId: string, update: Partial<AcpToolCallState>) => void;
+}) {
+  const trackedWriteOps: WriteOperations = {
+    writeFile: async (path: string, content: string) => {
+      const toolCallId = options.tracking.activeMutationToolCalls.get(path);
+      let oldText: string | null = null;
+
+      try {
+        const existing = await options.readOps.readFile(path);
+        oldText = existing.toString("utf-8");
+      } catch {
+        oldText = null;
+      }
+
+      if (toolCallId) {
+        options.onToolCallStateCaptured?.(toolCallId, {
+          toolName: "write",
+          path,
+          diff: { path, oldText, newText: content },
+        });
+        options.tracking.emitMutationToolProgressUpdate(toolCallId);
+      }
+
+      return options.baseWriteOps.writeFile(path, content);
+    },
+    mkdir: async (dir: string) => options.baseWriteOps.mkdir(dir),
+  };
+
+  const baseTool =
+    options.backend === "acp"
+      ? createAcpWriteBaseTool(options.cwd, trackedWriteOps)
+      : createLocalWriteBaseTool(options.cwd, trackedWriteOps);
+
+  return markToolBackend(
+    {
+      ...baseTool,
+      async execute(...args: Parameters<typeof baseTool.execute>) {
+        const [toolCallId, params, signal, onUpdate, ctx] = args;
+        const absolutePath = resolveToolPath(params.path, options.cwd);
+
+        options.onToolCallStateCaptured?.(toolCallId, {
+          toolName: "write",
+          path: absolutePath,
+        });
+
+        if (onUpdate) {
+          onUpdate({ content: [], details: undefined });
+          options.tracking.mutationToolProgressUpdates.set(toolCallId, () => {
+            onUpdate({ content: [], details: undefined });
+          });
+        } else {
+          options.tracking.mutationToolProgressUpdates.delete(toolCallId);
+        }
+
+        return trackMutationToolCall(
+          options.tracking.activeMutationToolCalls,
+          absolutePath,
+          toolCallId,
+          async () => {
+            try {
+              return await baseTool.execute(toolCallId, params, signal, onUpdate, ctx);
+            } finally {
+              options.tracking.mutationToolProgressUpdates.delete(toolCallId);
+            }
+          },
+        );
+      },
+    },
+    options.backend,
+  );
+}
+
+function wrapEditForAcp(options: {
+  cwd: string;
+  backend: Extract<ToolBackend, "acp" | "local">;
+  baseEditOps: EditOperations;
+  tracking: MutationToolTracking;
+  onToolCallStateCaptured?: (toolCallId: string, update: Partial<AcpToolCallState>) => void;
+}) {
+  const trackedEditOps: EditOperations = {
+    readFile: async (path: string) => {
+      const buffer = await options.baseEditOps.readFile(path);
+      options.tracking.editContents.set(path, buffer.toString("utf-8"));
+      return buffer;
+    },
+    writeFile: async (path: string, content: string) => {
+      const oldText = options.tracking.editContents.get(path);
+      const toolCallId = options.tracking.activeMutationToolCalls.get(path);
+
+      if (oldText !== undefined && toolCallId) {
+        options.onToolCallStateCaptured?.(toolCallId, {
+          toolName: "edit",
+          path,
+          diff: { path, oldText, newText: content },
+        });
+        options.tracking.emitMutationToolProgressUpdate(toolCallId);
+      }
+
+      options.tracking.editContents.delete(path);
+      return options.baseEditOps.writeFile(path, content);
+    },
+    access: async (path: string) => options.baseEditOps.access(path),
+  };
+
+  const baseTool =
+    options.backend === "acp"
+      ? createAcpEditBaseTool(options.cwd, trackedEditOps)
+      : createLocalEditBaseTool(options.cwd, trackedEditOps);
+
+  return markToolBackend(
+    {
+      ...baseTool,
+      async execute(...args: Parameters<typeof baseTool.execute>) {
+        const [toolCallId, params, signal, onUpdate, ctx] = args;
+        const absolutePath = resolveToolPath(params.path, options.cwd);
+
+        options.onToolCallStateCaptured?.(toolCallId, {
+          toolName: "edit",
+          path: absolutePath,
+        });
+
+        if (onUpdate) {
+          onUpdate({ content: [], details: undefined });
+          options.tracking.mutationToolProgressUpdates.set(toolCallId, () => {
+            onUpdate({ content: [], details: undefined });
+          });
+        } else {
+          options.tracking.mutationToolProgressUpdates.delete(toolCallId);
+        }
+
+        return trackMutationToolCall(
+          options.tracking.activeMutationToolCalls,
+          absolutePath,
+          toolCallId,
+          async () => {
+            try {
+              return await baseTool.execute(toolCallId, params, signal, onUpdate, ctx);
+            } finally {
+              options.tracking.mutationToolProgressUpdates.delete(toolCallId);
+              options.tracking.editContents.delete(absolutePath);
+            }
+          },
+        );
+      },
+    },
+    options.backend,
+  );
+}
+
+function wrapBashForAcp(options: {
+  cwd: string;
+  backend: Extract<ToolBackend, "acp" | "local">;
+  acpClient: AcpClientInterface;
+  onToolCallStateCaptured?: (toolCallId: string, update: Partial<AcpToolCallState>) => void;
+}) {
+  const localBashTool = createLocalBashBaseTool(options.cwd);
+  const toolTemplate =
+    options.backend === "local"
+      ? localBashTool
+      : createAcpBashBaseTool(options.cwd, new AcpTerminalOperations(options.acpClient));
+
+  return markToolBackend(
+    {
+      ...toolTemplate,
+      async execute(...args: Parameters<typeof toolTemplate.execute>) {
+        const [toolCallId, params, signal, onUpdate, ctx] = args;
+
+        options.onToolCallStateCaptured?.(toolCallId, {
+          toolName: "bash",
+          rawInput: params,
+        });
+
+        if (options.backend === "local") {
+          return localBashTool.execute(toolCallId, params, signal, onUpdate, ctx);
+        }
+
+        let emittedTerminalUpdate = false;
+        let terminalSnapshot:
+          | {
+              terminalId: string;
+              command: string;
+              args: string[];
+              cwd: string;
+              outputByteLimit: number | null;
+            }
+          | undefined;
+
+        const trackedBashOps = new AcpTerminalOperations(options.acpClient, {
+          onTerminalCreated: (terminal) => {
+            terminalSnapshot = {
+              terminalId: terminal.terminalId,
+              command: terminal.command,
+              args: terminal.args,
+              cwd: terminal.cwd,
+              outputByteLimit: terminal.outputByteLimit,
+            };
+
+            options.onToolCallStateCaptured?.(toolCallId, {
+              toolName: "bash",
+              terminalId: terminal.terminalId,
+              releaseTerminal: terminal.release,
+              rawOutput: buildBashRawOutput(params, terminalSnapshot),
+            });
+
+            if (!emittedTerminalUpdate) {
+              emittedTerminalUpdate = true;
+              onUpdate?.({ content: [], details: undefined });
+            }
+          },
+          onTerminalOutput: (output) => {
+            if (!terminalSnapshot) {
+              return;
+            }
+
+            options.onToolCallStateCaptured?.(toolCallId, {
+              rawOutput: buildBashRawOutput(params, terminalSnapshot, {
+                output: output.output,
+                truncated: output.truncated,
+              }),
+            });
+          },
+          onTerminalExit: (result) => {
+            if (!terminalSnapshot) {
+              return;
+            }
+
+            options.onToolCallStateCaptured?.(toolCallId, {
+              rawOutput: buildBashRawOutput(params, terminalSnapshot, {
+                output: result.output,
+                truncated: result.truncated,
+                exitCode: result.exitCode,
+                signal: result.signal,
+              }),
+            });
+          },
+        });
+
+        return createAcpBashBaseTool(options.cwd, trackedBashOps).execute(
+          toolCallId,
+          params,
+          signal,
+          onUpdate,
+          ctx,
+        );
+      },
+    },
+    options.backend,
+  );
+}
+
+// =============================================================================
+// Tool Selection
+// =============================================================================
+
+function buildAcpSessionTools(options: BuildAcpSessionToolsOptions) {
+  const authorizedRoots = getAuthorizedRoots(options.cwd, options.additionalDirectories);
+  const acpReadRoots = getAuthorizedRoots(options.cwd);
+  const tracking = createMutationToolTracking();
+
+  const localReadOps = createLocalReadOperations({ authorizedRoots });
+  const localWriteOps = createLocalWriteOperations({ authorizedRoots });
+  const localEditOps = createLocalEditOperations({ authorizedRoots });
+
+  const selectedReadOps: ReadOperations = options.clientCapabilities.supportsReadTextFile
+    ? new HybridReadOperations(
+        options.acpClient,
+        {
+          authorizedRoots,
+          acpReadRoots,
+        },
+        localReadOps,
+      )
+    : localReadOps;
+
+  const selectedWriteOps: WriteOperations = options.clientCapabilities.supportsWriteTextFile
+    ? new AcpWriteOperations(options.acpClient, {
+        authorizedRoots,
+        mkdirStrategy: options.clientCapabilities.supportsTerminal ? "terminal" : "local",
+      })
+    : localWriteOps;
+
+  const selectedEditOps: EditOperations =
+    options.clientCapabilities.supportsReadTextFile &&
+    options.clientCapabilities.supportsWriteTextFile
+      ? {
+          readFile: (absolutePath: string) => selectedReadOps.readFile(absolutePath),
+          writeFile: (absolutePath: string, content: string) =>
+            selectedWriteOps.writeFile(absolutePath, content),
+          access: (absolutePath: string) => selectedReadOps.access(absolutePath),
+        }
+      : localEditOps;
+
+  const readTool = options.clientCapabilities.supportsReadTextFile
+    ? createAcpReadBaseTool(options.cwd, selectedReadOps)
+    : createLocalReadBaseTool(options.cwd, selectedReadOps);
+
+  const writeTool = wrapWriteForAcp({
+    cwd: options.cwd,
+    backend: options.clientCapabilities.supportsWriteTextFile ? "acp" : "local",
+    readOps: selectedReadOps,
+    baseWriteOps: selectedWriteOps,
+    tracking,
+    onToolCallStateCaptured: options.onToolCallStateCaptured,
+  });
+
+  const editTool = wrapEditForAcp({
+    cwd: options.cwd,
+    backend:
+      options.clientCapabilities.supportsReadTextFile &&
+      options.clientCapabilities.supportsWriteTextFile
+        ? "acp"
+        : "local",
+    baseEditOps: selectedEditOps,
+    tracking,
+    onToolCallStateCaptured: options.onToolCallStateCaptured,
+  });
+
+  const bashTool = wrapBashForAcp({
+    cwd: options.cwd,
+    backend: options.clientCapabilities.supportsTerminal ? "acp" : "local",
+    acpClient: options.acpClient,
+    onToolCallStateCaptured: options.onToolCallStateCaptured,
+  });
+
+  return {
+    readTool,
+    writeTool,
+    editTool,
+    bashTool,
+  };
+}
+
 // =============================================================================
 // Runtime Factory
 // =============================================================================
@@ -223,11 +655,6 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
   dispose: () => void;
   getSlashCommands: () => import("@mariozechner/pi-coding-agent").SlashCommandInfo[];
 }> {
-  const missingCapabilities = getMissingRequiredClientCapabilities(options.clientCapabilities);
-  if (missingCapabilities.length > 0) {
-    throw new Error(createMissingClientCapabilitiesMessage(missingCapabilities));
-  }
-
   const { createAgentSession } = await import("@mariozechner/pi-coding-agent");
 
   const acpClient = new AcpConnectionAdapter(
@@ -236,237 +663,13 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
     options.clientCapabilities,
   );
 
-  const authorizedRoots = getAuthorizedRoots(options.cwd, options.additionalDirectories ?? []);
-  const acpReadRoots = getAuthorizedRoots(options.cwd);
-  const readOps: ReadOperations = new AcpReadOperations(acpClient, {
-    authorizedRoots,
-    acpReadRoots,
-    enableLocalReadFallback: true,
+  const { readTool, writeTool, editTool, bashTool } = buildAcpSessionTools({
+    cwd: options.cwd,
+    additionalDirectories: options.additionalDirectories ?? [],
+    acpClient,
+    clientCapabilities: options.clientCapabilities,
+    onToolCallStateCaptured: options.onToolCallStateCaptured,
   });
-  const baseWriteOps: WriteOperations = new AcpWriteOperations(acpClient, { authorizedRoots });
-
-  const activeMutationToolCalls = new Map<string, string>();
-  const mutationToolProgressUpdates = new Map<string, () => void>();
-  const editContents = new Map<string, string>();
-
-  const emitMutationToolProgressUpdate = (toolCallId: string | undefined) => {
-    if (!toolCallId) {
-      return;
-    }
-
-    const emit = mutationToolProgressUpdates.get(toolCallId);
-    if (!emit) {
-      return;
-    }
-
-    // Emit at most one in-progress update per mutation tool call.
-    mutationToolProgressUpdates.delete(toolCallId);
-    emit();
-  };
-
-  const writeOps: WriteOperations = {
-    writeFile: async (path: string, content: string) => {
-      const toolCallId = activeMutationToolCalls.get(path);
-      let oldText: string | null = null;
-
-      try {
-        const existing = await readOps.readFile(path);
-        oldText = existing.toString("utf-8");
-      } catch {
-        oldText = null;
-      }
-
-      if (toolCallId) {
-        options.onToolCallStateCaptured?.(toolCallId, {
-          toolName: "write",
-          path,
-          diff: { path, oldText, newText: content },
-        });
-        emitMutationToolProgressUpdate(toolCallId);
-      }
-
-      return baseWriteOps.writeFile(path, content);
-    },
-    mkdir: async (dir: string) => baseWriteOps.mkdir(dir),
-  };
-
-  const editOps: EditOperations = {
-    readFile: async (path: string) => {
-      const buffer = await readOps.readFile(path);
-      editContents.set(path, buffer.toString("utf-8"));
-      return buffer;
-    },
-    writeFile: async (path: string, content: string) => {
-      const oldText = editContents.get(path);
-      const toolCallId = activeMutationToolCalls.get(path);
-
-      if (oldText !== undefined && toolCallId) {
-        options.onToolCallStateCaptured?.(toolCallId, {
-          toolName: "edit",
-          path,
-          diff: { path, oldText, newText: content },
-        });
-        emitMutationToolProgressUpdate(toolCallId);
-      }
-
-      editContents.delete(path);
-      return baseWriteOps.writeFile(path, content);
-    },
-    access: async (path: string) => readOps.access(path),
-  };
-
-  const readTool = createReadToolDefinition(options.cwd, { operations: readOps });
-
-  const bashToolBase = createBashToolDefinition(options.cwd);
-  const localBashToolDefinition = createBashToolDefinition(options.cwd, {
-    operations: createLocalBashFallbackOperations(),
-  });
-  const bashTool: typeof bashToolBase = {
-    ...bashToolBase,
-    async execute(toolCallId, params, signal, onUpdate, ctx) {
-      options.onToolCallStateCaptured?.(toolCallId, {
-        toolName: "bash",
-        rawInput: params,
-      });
-
-      if (!options.clientCapabilities.supportsTerminal) {
-        return localBashToolDefinition.execute(toolCallId, params, signal, onUpdate, ctx);
-      }
-
-      let emittedTerminalUpdate = false;
-      let terminalSnapshot:
-        | {
-            terminalId: string;
-            command: string;
-            args: string[];
-            cwd: string;
-            outputByteLimit: number | null;
-          }
-        | undefined;
-
-      const trackedBashOps = new AcpTerminalOperations(acpClient, {
-        onTerminalCreated: (terminal) => {
-          terminalSnapshot = {
-            terminalId: terminal.terminalId,
-            command: terminal.command,
-            args: terminal.args,
-            cwd: terminal.cwd,
-            outputByteLimit: terminal.outputByteLimit,
-          };
-
-          options.onToolCallStateCaptured?.(toolCallId, {
-            toolName: "bash",
-            terminalId: terminal.terminalId,
-            releaseTerminal: terminal.release,
-            rawOutput: buildBashRawOutput(params, terminalSnapshot),
-          });
-
-          if (!emittedTerminalUpdate) {
-            emittedTerminalUpdate = true;
-            onUpdate?.({ content: [], details: undefined });
-          }
-        },
-        onTerminalOutput: (output) => {
-          if (!terminalSnapshot) {
-            return;
-          }
-
-          options.onToolCallStateCaptured?.(toolCallId, {
-            rawOutput: buildBashRawOutput(params, terminalSnapshot, {
-              output: output.output,
-              truncated: output.truncated,
-            }),
-          });
-        },
-        onTerminalExit: (result) => {
-          if (!terminalSnapshot) {
-            return;
-          }
-
-          options.onToolCallStateCaptured?.(toolCallId, {
-            rawOutput: buildBashRawOutput(params, terminalSnapshot, {
-              output: result.output,
-              truncated: result.truncated,
-              exitCode: result.exitCode,
-              signal: result.signal,
-            }),
-          });
-        },
-      });
-
-      return createBashToolDefinition(options.cwd, { operations: trackedBashOps }).execute(
-        toolCallId,
-        params,
-        signal,
-        onUpdate,
-        ctx,
-      );
-    },
-  };
-
-  const writeToolBase = createWriteToolDefinition(options.cwd, { operations: writeOps });
-  const writeTool: typeof writeToolBase = {
-    ...writeToolBase,
-    async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const absolutePath = resolveToolPath(params.path, options.cwd);
-
-      options.onToolCallStateCaptured?.(toolCallId, {
-        toolName: "write",
-        path: absolutePath,
-      });
-
-      if (onUpdate) {
-        // Emit an immediate progress update so ACP clients can flip the tool
-        // card out of "pending" even before the write diff is available.
-        onUpdate({ content: [], details: undefined });
-        mutationToolProgressUpdates.set(toolCallId, () => {
-          onUpdate({ content: [], details: undefined });
-        });
-      } else {
-        mutationToolProgressUpdates.delete(toolCallId);
-      }
-
-      return trackMutationToolCall(activeMutationToolCalls, absolutePath, toolCallId, async () => {
-        try {
-          return await writeToolBase.execute(toolCallId, params, signal, onUpdate, ctx);
-        } finally {
-          mutationToolProgressUpdates.delete(toolCallId);
-        }
-      });
-    },
-  };
-
-  const editToolBase = createEditToolDefinition(options.cwd, { operations: editOps });
-  const editTool: typeof editToolBase = {
-    ...editToolBase,
-    async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const absolutePath = resolveToolPath(params.path, options.cwd);
-
-      options.onToolCallStateCaptured?.(toolCallId, {
-        toolName: "edit",
-        path: absolutePath,
-      });
-
-      if (onUpdate) {
-        // Emit an immediate progress update so ACP clients can flip the tool
-        // card out of "pending" even before the edit diff is available.
-        onUpdate({ content: [], details: undefined });
-        mutationToolProgressUpdates.set(toolCallId, () => {
-          onUpdate({ content: [], details: undefined });
-        });
-      } else {
-        mutationToolProgressUpdates.delete(toolCallId);
-      }
-
-      return trackMutationToolCall(activeMutationToolCalls, absolutePath, toolCallId, async () => {
-        try {
-          return await editToolBase.execute(toolCallId, params, signal, onUpdate, ctx);
-        } finally {
-          mutationToolProgressUpdates.delete(toolCallId);
-        }
-      });
-    },
-  };
 
   const tools = [readTool, writeTool, editTool, bashTool] as unknown as NonNullable<
     CreateAgentSessionOptions["customTools"]
@@ -489,7 +692,7 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
     dispose: () => {
       session.dispose();
     },
-    getSlashCommands: () => extensionsResult.runtime.getCommands(),
+    getSlashCommands: () => extensionsResult?.runtime?.getCommands?.() ?? [],
   };
 }
 

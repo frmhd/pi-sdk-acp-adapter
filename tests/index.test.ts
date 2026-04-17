@@ -138,7 +138,7 @@ describe("AcpAgent initialize", () => {
     });
   });
 
-  test("fails early when required filesystem capabilities are missing", async () => {
+  test("allows initialization when ACP filesystem capabilities are missing", async () => {
     const agent = createTestAgent();
 
     await expect(
@@ -149,7 +149,9 @@ describe("AcpAgent initialize", () => {
           terminal: false,
         },
       }),
-    ).rejects.toThrow(/requires ACP client capabilities: fs.writeTextFile/i);
+    ).resolves.toMatchObject({
+      protocolVersion: 1,
+    });
 
     expect(agent.getClientCapabilities()).toMatchObject({
       supportsReadTextFile: true,
@@ -206,6 +208,35 @@ describe("AcpAgent initialize", () => {
           supportsReadTextFile: true,
           supportsWriteTextFile: true,
           supportsTerminal: true,
+        }),
+      }),
+    );
+  });
+
+  test("creates sessions even when ACP fs capabilities are missing", async () => {
+    const createRuntime = vi.fn(async (_options: any) => ({
+      session: createMockSession(),
+      dispose: vi.fn(),
+    }));
+    const agent = createTestAgent(createMockConnection(), createRuntime);
+
+    await agent.initialize({
+      protocolVersion: 1,
+      clientCapabilities: {
+        fs: { readTextFile: false, writeTextFile: false },
+        terminal: false,
+      },
+    });
+
+    await expect(agent.newSession({ cwd: "/tmp/project" } as any)).resolves.toMatchObject({
+      sessionId: expect.any(String),
+    });
+    expect(createRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientCapabilities: expect.objectContaining({
+          supportsReadTextFile: false,
+          supportsWriteTextFile: false,
+          supportsTerminal: false,
         }),
       }),
     );

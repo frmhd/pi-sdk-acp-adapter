@@ -2,7 +2,7 @@
 
 ACP adapter for [Pi Coding Agent](https://github.com/badlogic/pi-mono) implementing the Agent Communication Protocol (ACP).
 
-It presents Pi honestly as **Pi Coding Agent** while mapping Pi's native 4-tool workflow onto ACP. Tested primarily with [Zed](https://zed.dev) as the reference client, but should be compatible with any ACP-compliant client that provides the required filesystem capabilities (`fs.readTextFile`, `fs.writeTextFile`). When `terminal` is unavailable, bash falls back to local execution.
+It presents Pi honestly as **Pi Coding Agent** while mapping Pi's native 4-tool workflow onto ACP. Tested primarily with [Zed](https://zed.dev) as the reference client. Tool backends are selected per client/session from the ACP capabilities the client advertises: ACP-backed where available, local Pi backends otherwise. When `terminal` is unavailable, bash falls back to local execution.
 
 ## What this adapter does
 
@@ -61,17 +61,26 @@ Implemented and intentionally supported:
   - session info updates
   - available commands updates
 
-Client capability requirements:
+Client capability handling:
 
-- `fs.readTextFile`
-- `fs.writeTextFile`
-- `terminal` (optional; enables ACP terminal embedding for `bash`)
+- `fs.readTextFile` — optional; when present, `read` prefers ACP with intentional local fallback for authorized paths outside ACP-visible roots
+- `fs.writeTextFile` — optional; when present, `write` uses ACP-backed writes
+- `terminal` — optional; when present, `bash` uses ACP terminal embedding
 
 Optional client auth capability:
 
 - `auth.terminal` — enables ACP terminal auth methods for Pi's built-in OAuth providers
 
-If an ACP client does not provide the required filesystem capabilities, the adapter fails fast instead of pretending Pi can operate correctly. When terminal support is missing, the adapter stays ACP-compliant by avoiding terminal methods and running bash locally instead.
+Backend selection rules in the current first pass:
+
+| Tool    | Selected backend                                                                                          |
+| ------- | --------------------------------------------------------------------------------------------------------- |
+| `read`  | ACP-backed mixed read when `fs.readTextFile` is available, else local Pi read                             |
+| `write` | ACP-backed write when `fs.writeTextFile` is available, else local Pi write                                |
+| `edit`  | ACP-backed edit only when both `fs.readTextFile` and `fs.writeTextFile` are available, else local Pi edit |
+| `bash`  | ACP terminal-backed bash when `terminal` is available, else local Pi bash                                 |
+
+This means missing ACP filesystem/terminal capabilities do **not** block initialization or session creation. The adapter stays ACP-compliant by only calling ACP methods the client actually advertised, while preserving Pi behavior through local tool backends where needed.
 
 Client-specific UX enhancements are driven by compatibility testing (Zed is the reference), but Pi's native behavior remains the source of truth.
 

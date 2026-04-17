@@ -184,30 +184,26 @@ export function captureClientCapabilities(
 }
 
 /**
- * Get the list of ACP client capabilities strictly required by the adapter.
+ * Back-compat helper retained for the public API.
  *
- * `terminal` is intentionally optional: when it is unavailable, bash tool calls
- * fall back to local command execution instead of ACP terminal embedding.
+ * ACP client capabilities are no longer strictly required. The adapter selects
+ * ACP-backed or local Pi tool backends per session based on what the client
+ * advertises, so initialization/session creation can proceed even when ACP fs or
+ * terminal features are unavailable.
  */
 export function getMissingRequiredClientCapabilities(
-  capabilities: AcpClientCapabilitiesSnapshot,
+  _capabilities: AcpClientCapabilitiesSnapshot,
 ): string[] {
-  const missing: string[] = [];
-
-  if (!capabilities.supportsReadTextFile) {
-    missing.push("fs.readTextFile");
-  }
-
-  if (!capabilities.supportsWriteTextFile) {
-    missing.push("fs.writeTextFile");
-  }
-
-  return missing;
+  return [];
 }
 
-/** Create a user-facing incompatibility message for missing ACP client capabilities. */
+/** Create a user-facing compatibility message for capability-based fallback mode. */
 export function createMissingClientCapabilitiesMessage(missing: string[]): string {
-  return `Pi Coding Agent requires ACP client capabilities: ${missing.join(", ")}. This client is not compatible with Pi's read/write/edit/bash tool surface.`;
+  if (missing.length === 0) {
+    return "Pi Coding Agent selects ACP-backed or local tool backends at runtime based on the connected client's capabilities.";
+  }
+
+  return `Pi Coding Agent will fall back to local tool backends for unsupported ACP capabilities: ${missing.join(", ")}.`;
 }
 
 // =============================================================================

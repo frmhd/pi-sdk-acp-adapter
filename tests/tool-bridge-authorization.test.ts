@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
 import {
-  AcpReadOperations,
   AcpWriteOperations,
+  HybridReadOperations,
   getAuthorizedRoots,
 } from "../src/adapter/AcpToolBridge.ts";
 
@@ -77,10 +77,9 @@ describe("ACP tool bridge path authorization", () => {
     await writeFile(sharedFile, "outside-local", "utf-8");
 
     const client = createMockClient();
-    const readOps = new AcpReadOperations(client, {
+    const readOps = new HybridReadOperations(client, {
       authorizedRoots: getAuthorizedRoots(cwd, [shared]),
       acpReadRoots: getAuthorizedRoots(cwd),
-      enableLocalReadFallback: true,
     });
 
     await expect(readOps.readFile(cwdFile)).resolves.toEqual(
@@ -129,7 +128,7 @@ describe("ACP tool bridge path authorization", () => {
     await expect(writeOps.mkdir("/tmp/generated")).rejects.toThrow(/ACP create directory denied/i);
   });
 
-  test("falls back to local mkdir when terminal support is unavailable", async () => {
+  test("can use local mkdir when selected by the runtime tool layer", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-acp-mkdir-"));
     tempDirs.push(root);
 
@@ -137,7 +136,10 @@ describe("ACP tool bridge path authorization", () => {
     client.capabilities.supportsTerminal = false;
 
     const targetDir = join(root, "nested", "generated");
-    const writeOps = new AcpWriteOperations(client, { authorizedRoots: [root] });
+    const writeOps = new AcpWriteOperations(client, {
+      authorizedRoots: [root],
+      mkdirStrategy: "local",
+    });
 
     await expect(writeOps.mkdir(targetDir)).resolves.toBeUndefined();
     const stats = await stat(targetDir);

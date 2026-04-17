@@ -2,14 +2,18 @@
  * ACP Tool Bridge
  *
  * Bridges Pi's 4 core tools (read, write, edit, bash) to ACP client methods.
- * File operations are delegated through ACP filesystem requests. Bash prefers
- * ACP terminals, but can fall back to local child_process execution when the
- * client does not advertise terminal support.
+ * ACP-backed operations stay strict; capability-based backend selection now
+ * happens in runtime/session setup.
  */
 
 import { constants } from "node:fs";
-import { access as fsAccess, mkdir as fsMkdir, readFile as fsReadFile } from "node:fs/promises";
-import { resolve as resolvePath, sep } from "node:path";
+import {
+  access as fsAccess,
+  mkdir as fsMkdir,
+  readFile as fsReadFile,
+  writeFile as fsWriteFile,
+} from "node:fs/promises";
+import { extname, resolve as resolvePath, sep } from "node:path";
 
 import type {
   ToolCallContent,
@@ -22,6 +26,7 @@ import {
   DEFAULT_MAX_BYTES,
   createLocalBashOperations,
   type BashOperations,
+  type EditOperations,
   type ReadOperations,
   type WriteOperations,
 } from "@mariozechner/pi-coding-agent";
@@ -66,20 +71,15 @@ function createMkdirTerminalRequest(dir: string): { command: string; args: strin
 }
 
 export interface AcpPathAuthorizationOptions {
-  /** Absolute workspace roots allowed for ACP filesystem operations. */
+  /** Absolute workspace roots allowed for filesystem operations. */
   authorizedRoots?: string[];
-  /**
-   * Absolute roots that should keep using ACP fs/read_text_file.
-   * Authorized paths outside these roots can fall back to Pi's local read
-   * implementation when enableLocalReadFallback is true.
-   */
+}
+
+export interface AcpReadFallbackPolicyOptions extends AcpPathAuthorizationOptions {
+  /** Absolute roots that should keep using ACP fs/read_text_file. */
   acpReadRoots?: string[];
-  /**
-   * Whether authorized reads may fall back to Pi's local filesystem access.
-   * This is primarily used for additionalDirectories until ACP clients like
-   * Zed implement additionalDirectories/worktrees for fs/read_text_file.
-   */
-  enableLocalReadFallback?: boolean;
+  /** Optional roots that should always bypass ACP reads. */
+  alwaysLocalRoots?: string[];
 }
 
 function normalizeAuthorizedPath(path: string): string {
@@ -125,6 +125,20 @@ function isAcpResourceNotFoundError(error: unknown): boolean {
   return errorWithCode.code === -32002 || /resource not found/i.test(error.message);
 }
 
+export function normalizeAcpFsError(error: unknown, absolutePath: string): Error {
+  if (isAcpResourceNotFoundError(error)) {
+    const normalized = new Error(
+      `ENOENT: no such file or directory, open ${JSON.stringify(absolutePath)}`,
+    ) as NodeJS.ErrnoException;
+    normalized.code = "ENOENT";
+    normalized.errno = -2;
+    normalized.path = absolutePath;
+    return normalized;
+  }
+
+  return error instanceof Error ? error : new Error(String(error));
+}
+
 export function assertPathAuthorized(
   path: string,
   authorizedRoots: string[],
@@ -137,6 +151,93 @@ export function assertPathAuthorized(
   throw new Error(
     `ACP ${operation} denied for path ${JSON.stringify(path)}. Allowed workspace roots: ${authorizedRoots.join(", ")}. Filesystem access is limited to the session cwd and additionalDirectories.`,
   );
+}
+
+export function shouldBypassAcpRead(
+  absolutePath: string,
+  options: AcpReadFallbackPolicyOptions,
+): boolean {
+  const authorizedRoots = options.authorizedRoots ?? [];
+  assertPathAuthorized(absolutePath, authorizedRoots, "read");
+
+  const alwaysLocalRoots = options.alwaysLocalRoots ?? [];
+  if (alwaysLocalRoots.length > 0 && isPathWithinAuthorizedRoots(absolutePath, alwaysLocalRoots)) {
+    return true;
+  }
+
+  const acpReadRoots = options.acpReadRoots ?? authorizedRoots;
+  if (acpReadRoots.length === 0) {
+    return false;
+  }
+
+  return !isPathWithinAuthorizedRoots(absolutePath, acpReadRoots);
+}
+
+const LOCAL_IMAGE_MIME_TYPES: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+};
+
+function detectLocalImageMimeType(absolutePath: string): string | null {
+  return LOCAL_IMAGE_MIME_TYPES[extname(absolutePath).toLowerCase()] ?? null;
+}
+
+export function createLocalReadOperations(
+  options: AcpPathAuthorizationOptions = {},
+): ReadOperations {
+  const authorizedRoots = options.authorizedRoots ?? [];
+
+  return {
+    async readFile(absolutePath: string): Promise<Buffer> {
+      assertPathAuthorized(absolutePath, authorizedRoots, "read");
+      return fsReadFile(absolutePath);
+    },
+    async access(absolutePath: string): Promise<void> {
+      assertPathAuthorized(absolutePath, authorizedRoots, "read");
+      await fsAccess(absolutePath, constants.R_OK);
+    },
+    async detectImageMimeType(absolutePath: string): Promise<string | null> {
+      assertPathAuthorized(absolutePath, authorizedRoots, "read");
+      return detectLocalImageMimeType(absolutePath);
+    },
+  };
+}
+
+export function createLocalWriteOperations(
+  options: AcpPathAuthorizationOptions = {},
+): WriteOperations {
+  const authorizedRoots = options.authorizedRoots ?? [];
+
+  return {
+    async writeFile(absolutePath: string, content: string): Promise<void> {
+      assertPathAuthorized(absolutePath, authorizedRoots, "write");
+      await fsWriteFile(absolutePath, content, "utf-8");
+    },
+    async mkdir(dir: string): Promise<void> {
+      assertPathAuthorized(dir, authorizedRoots, "create directory");
+      await fsMkdir(dir, { recursive: true });
+    },
+  };
+}
+
+export function createLocalEditOperations(
+  options: AcpPathAuthorizationOptions = {},
+): EditOperations {
+  const authorizedRoots = options.authorizedRoots ?? [];
+  const localReadOps = createLocalReadOperations({ authorizedRoots });
+  const localWriteOps = createLocalWriteOperations({ authorizedRoots });
+
+  return {
+    readFile: localReadOps.readFile,
+    writeFile: localWriteOps.writeFile,
+    async access(absolutePath: string): Promise<void> {
+      assertPathAuthorized(absolutePath, authorizedRoots, "read");
+      await fsAccess(absolutePath, constants.R_OK | constants.W_OK);
+    },
+  };
 }
 
 // =============================================================================
@@ -439,45 +540,16 @@ export class AcpTerminalOperations implements BashOperations {
 export class AcpReadOperations implements ReadOperations {
   private client: AcpClientInterface;
   private authorizedRoots: string[];
-  private acpReadRoots: string[];
-  private enableLocalReadFallback: boolean;
 
   constructor(client: AcpClientInterface, options: AcpPathAuthorizationOptions = {}) {
     this.client = client;
     this.authorizedRoots = options.authorizedRoots ?? [];
-    this.acpReadRoots = options.acpReadRoots ?? this.authorizedRoots;
-    this.enableLocalReadFallback = options.enableLocalReadFallback ?? false;
-  }
-
-  private shouldPreferAcpRead(absolutePath: string): boolean {
-    if (this.acpReadRoots.length === 0) {
-      return true;
-    }
-
-    return isPathWithinAuthorizedRoots(absolutePath, this.acpReadRoots);
-  }
-
-  private async readFileLocally(absolutePath: string): Promise<Buffer> {
-    return fsReadFile(absolutePath);
-  }
-
-  private async accessLocally(absolutePath: string): Promise<void> {
-    await fsAccess(absolutePath, constants.R_OK);
   }
 
   async readFile(absolutePath: string): Promise<Buffer> {
-    // assertPathAuthorized(absolutePath, this.authorizedRoots, "read");
-
-    const shouldUseLocalRead =
-      this.enableLocalReadFallback && !this.shouldPreferAcpRead(absolutePath);
-    if (shouldUseLocalRead) {
-      return this.readFileLocally(absolutePath);
-    }
+    assertPathAuthorized(absolutePath, this.authorizedRoots, "read");
 
     if (!this.client.capabilities.supportsReadTextFile) {
-      if (this.enableLocalReadFallback) {
-        return this.readFileLocally(absolutePath);
-      }
       throw new Error("ACP client does not support fs/read_text_file.");
     }
 
@@ -488,22 +560,12 @@ export class AcpReadOperations implements ReadOperations {
       });
       return Buffer.from(result.content, "utf-8");
     } catch (error) {
-      if (this.enableLocalReadFallback && isAcpResourceNotFoundError(error)) {
-        return this.readFileLocally(absolutePath);
-      }
-      throw error;
+      throw normalizeAcpFsError(error, absolutePath);
     }
   }
 
   async access(absolutePath: string): Promise<void> {
-    // assertPathAuthorized(absolutePath, this.authorizedRoots, "read");
-
-    const shouldUseLocalRead =
-      this.enableLocalReadFallback &&
-      (!this.client.capabilities.supportsReadTextFile || !this.shouldPreferAcpRead(absolutePath));
-    if (shouldUseLocalRead) {
-      return this.accessLocally(absolutePath);
-    }
+    assertPathAuthorized(absolutePath, this.authorizedRoots, "read");
 
     if (!this.client.capabilities.supportsReadTextFile) {
       throw new Error("ACP client does not support fs/read_text_file.");
@@ -515,12 +577,53 @@ export class AcpReadOperations implements ReadOperations {
         sessionId: this.client.sessionId,
       });
     } catch (error) {
-      if (this.enableLocalReadFallback && isAcpResourceNotFoundError(error)) {
-        await this.accessLocally(absolutePath);
-        return;
-      }
-      throw error;
+      throw normalizeAcpFsError(error, absolutePath);
     }
+  }
+}
+
+/** Mixed read operations: ACP within ACP-visible roots, local elsewhere. */
+export class HybridReadOperations implements ReadOperations {
+  private readonly localReadOps: ReadOperations;
+  private readonly acpReadOps: AcpReadOperations;
+  private readonly policy: AcpReadFallbackPolicyOptions;
+
+  constructor(
+    client: AcpClientInterface,
+    options: AcpReadFallbackPolicyOptions = {},
+    localReadOps: ReadOperations = createLocalReadOperations({
+      authorizedRoots: options.authorizedRoots,
+    }),
+  ) {
+    this.localReadOps = localReadOps;
+    this.acpReadOps = new AcpReadOperations(client, {
+      authorizedRoots: options.authorizedRoots,
+    });
+    this.policy = options;
+  }
+
+  async readFile(absolutePath: string): Promise<Buffer> {
+    if (shouldBypassAcpRead(absolutePath, this.policy)) {
+      return this.localReadOps.readFile(absolutePath);
+    }
+
+    return this.acpReadOps.readFile(absolutePath);
+  }
+
+  async access(absolutePath: string): Promise<void> {
+    if (shouldBypassAcpRead(absolutePath, this.policy)) {
+      return this.localReadOps.access(absolutePath);
+    }
+
+    return this.acpReadOps.access(absolutePath);
+  }
+
+  async detectImageMimeType(absolutePath: string): Promise<string | null | undefined> {
+    if (shouldBypassAcpRead(absolutePath, this.policy)) {
+      return this.localReadOps.detectImageMimeType?.(absolutePath);
+    }
+
+    return undefined;
   }
 }
 
@@ -528,14 +631,20 @@ export class AcpReadOperations implements ReadOperations {
 // Write Operations Bridge
 // =============================================================================
 
+export interface AcpWriteOperationsOptions extends AcpPathAuthorizationOptions {
+  mkdirStrategy?: "local" | "terminal";
+}
+
 /** ACP Write Operations delegates file writes to the ACP client. */
 export class AcpWriteOperations implements WriteOperations {
   private client: AcpClientInterface;
   private authorizedRoots: string[];
+  private mkdirStrategy: "local" | "terminal";
 
-  constructor(client: AcpClientInterface, options: AcpPathAuthorizationOptions = {}) {
+  constructor(client: AcpClientInterface, options: AcpWriteOperationsOptions = {}) {
     this.client = client;
     this.authorizedRoots = options.authorizedRoots ?? [];
+    this.mkdirStrategy = options.mkdirStrategy ?? "terminal";
   }
 
   async writeFile(absolutePath: string, content: string): Promise<void> {
@@ -544,19 +653,27 @@ export class AcpWriteOperations implements WriteOperations {
       throw new Error("ACP client does not support fs/write_text_file.");
     }
 
-    await this.client.writeTextFile({
-      path: absolutePath,
-      content,
-      sessionId: this.client.sessionId,
-    });
+    try {
+      await this.client.writeTextFile({
+        path: absolutePath,
+        content,
+        sessionId: this.client.sessionId,
+      });
+    } catch (error) {
+      throw normalizeAcpFsError(error, absolutePath);
+    }
   }
 
   async mkdir(dir: string): Promise<void> {
     assertPathAuthorized(dir, this.authorizedRoots, "create directory");
 
-    if (!this.client.capabilities.supportsTerminal) {
+    if (this.mkdirStrategy === "local") {
       await fsMkdir(dir, { recursive: true });
       return;
+    }
+
+    if (!this.client.capabilities.supportsTerminal) {
+      throw new Error("ACP client does not support terminal/create.");
     }
 
     const mkdirRequest = createMkdirTerminalRequest(dir);
@@ -584,7 +701,7 @@ export class AcpEditOperations {
   private readOps: AcpReadOperations;
   private writeOps: AcpWriteOperations;
 
-  constructor(client: AcpClientInterface, options: AcpPathAuthorizationOptions = {}) {
+  constructor(client: AcpClientInterface, options: AcpWriteOperationsOptions = {}) {
     this.readOps = new AcpReadOperations(client, options);
     this.writeOps = new AcpWriteOperations(client, options);
   }
@@ -628,30 +745,28 @@ export class AcpToolBridge {
     this.authorization = authorization;
   }
 
-  getBashOperations(): BashOperations | undefined {
+  getBashOperations(): BashOperations {
     if (!this.bashOps) {
-      this.bashOps = this.client.capabilities.supportsTerminal
-        ? new AcpTerminalOperations(this.client)
-        : createLocalBashFallbackOperations();
+      this.bashOps = new AcpTerminalOperations(this.client);
     }
     return this.bashOps;
   }
 
-  getReadOperations(): ReadOperations | undefined {
+  getReadOperations(): ReadOperations {
     if (!this.readOps) {
       this.readOps = new AcpReadOperations(this.client, this.authorization);
     }
     return this.readOps;
   }
 
-  getWriteOperations(): WriteOperations | undefined {
+  getWriteOperations(): WriteOperations {
     if (!this.writeOps) {
       this.writeOps = new AcpWriteOperations(this.client, this.authorization);
     }
     return this.writeOps;
   }
 
-  getEditOperations(): AcpEditOperations | undefined {
+  getEditOperations(): AcpEditOperations {
     if (!this.editOps) {
       this.editOps = new AcpEditOperations(this.client, this.authorization);
     }
