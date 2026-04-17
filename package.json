@@ -1,13 +1,13 @@
 {
   "name": "pi-sdk-acp-adapter",
   "version": "0.1.0",
-  "description": "ACP adapter for Pi Coding Agent SDK - bridges Pi to ACP-compatible clients like Zed",
+  "description": "ACP adapter for Pi Coding Agent SDK - bridges Pi to ACP-compatible clients like Zed, JetBrains IDEs, Obsidian with Agent Client plugin, etc.",
   "homepage": "https://github.com/frmhd/pi-sdk-acp-adapter",
   "bugs": {
     "url": "https://github.com/frmhd/pi-sdk-acp-adapter/issues"
   },
   "license": "MIT",
-  "author": "Pi Team",
+  "author": "frmhd",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/frmhd/pi-sdk-acp-adapter.git"
