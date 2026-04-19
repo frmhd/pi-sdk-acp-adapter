@@ -1,302 +1,72 @@
-/**
- * ACP Agent Implementation
- *
- * Implements the ACP Agent interface, bridging the Pi Coding Agent SDK
- * with ACP-compatible clients like Zed.
- *
- * This class:
- * - Handles ACP protocol initialization (capabilities, authentication)
- * - Manages Pi AgentSession lifecycle (create, prompt, cancel)
- * - Maps Pi events to ACP session notifications
- * - Handles session configuration (model selection, thinking level)
- */
-
-import type { Agent, AgentSideConnection } from "@agentclientprotocol/sdk";
-
 import type {
-  InitializeRequest,
-  InitializeResponse,
-  NewSessionRequest,
-  NewSessionResponse,
-  LoadSessionRequest,
-  LoadSessionResponse,
-  PromptRequest,
-  PromptResponse,
-  CancelNotification,
-  SetSessionConfigOptionRequest,
-  SetSessionConfigOptionResponse,
+  Agent,
+  AgentSideConnection,
   AuthenticateRequest,
   AuthenticateResponse,
-  ContentBlock,
+  CancelNotification,
   CloseSessionRequest,
   CloseSessionResponse,
+  InitializeRequest,
+  InitializeResponse,
   ListSessionsRequest,
   ListSessionsResponse,
+  LoadSessionRequest,
+  LoadSessionResponse,
+  NewSessionRequest,
+  NewSessionResponse,
+  PromptRequest,
+  PromptResponse,
   ResumeSessionRequest,
   ResumeSessionResponse,
+  SetSessionConfigOptionRequest,
+  SetSessionConfigOptionResponse,
 } from "@agentclientprotocol/sdk";
-
-import type { ImageContent as PiImageContent } from "@mariozechner/pi-ai";
-
+import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { SessionManager, type ModelRegistry } from "@mariozechner/pi-coding-agent";
 
-import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
-
-import type {
-  AcpBashTerminalRawOutput,
-  AcpClientCapabilitiesSnapshot,
-  AcpSessionState,
-  AcpSessionUsageSnapshot,
-  AcpToolCallState,
-} from "./types.js";
-
-import { mapAgentEvent, mapStopReason } from "./AcpEventMapper.js";
-
+import type { AcpClientCapabilitiesSnapshot, AcpSessionState } from "./types.js";
+import { captureClientCapabilities } from "./types.js";
 import {
-  areAvailableCommandsEqual,
-  buildAcpAvailableCommands,
+  buildSetSessionConfigOptionResponse,
+  getAvailableModels,
+  getModelOptionValue,
+  handleSetSessionConfigOption,
+} from "./AcpSessionConfig.js";
+import {
   buildAcpSessionInfo,
-  emitAvailableCommandsUpdate,
-  emitConfigOptionsUpdate,
-  emitSessionInfoUpdate,
-  emitUsageUpdate,
   getAcpSessionDirectory,
-  getCurrentSessionMetadata,
   listPersistedPiSessions,
   replaySessionHistory,
 } from "./AcpSessionLifecycle.js";
-
-import { captureClientCapabilities } from "./types.js";
-
-import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
-
+import { executePrompt } from "./agent/promptExecution.js";
 import {
-  areSessionConfigOptionsEqual,
-  getAvailableModels,
-  getCurrentConfigOptions,
-  getModelOptionValue,
-  handleSetSessionConfigOption,
-  buildSetSessionConfigOptionResponse,
-} from "./AcpSessionConfig.js";
-import { resolvePromptPathsInText } from "./resolvePromptPaths.js";
-
+  getSessionConfigOptions,
+  refreshAvailableCommands as refreshAvailableCommandsForSession,
+  refreshConfigOptions as refreshConfigOptionsForSession,
+  refreshSessionMetadata as refreshSessionMetadataForSession,
+  refreshSessionUsage as refreshSessionUsageForSession,
+  scheduleInitialSessionUpdates as scheduleInitialUpdates,
+} from "./agent/sessionRefresh.js";
+import {
+  getOrCreateToolCallState,
+  releasePendingToolCallResources,
+} from "./agent/toolCallState.js";
 import type { CreateAcpAgentRuntimeOptions } from "../runtime/AcpAgentRuntime.js";
-import { ACP_AGENT_NAME, ACP_AGENT_TITLE, ADAPTER_VERSION } from "../packageMetadata.js";
 import {
   buildTerminalAuthMethods,
   getProviderIdFromTerminalAuthMethodId,
 } from "../auth/terminalAuth.js";
+import { ACP_AGENT_NAME, ACP_AGENT_TITLE, ADAPTER_VERSION } from "../packageMetadata.js";
 
-// =============================================================================
-// ACP Protocol Version
-// =============================================================================
-
-/** Current ACP protocol version supported by this adapter */
 const PROTOCOL_VERSION = 1;
 
-// =============================================================================
-// Content Extraction Helpers
-// =============================================================================
-
-/** Result of extracting content from ACP ContentBlock array. */
-interface ExtractedContent {
-  /** Combined text from all text blocks. */
-  text: string;
-  /** Image content blocks for Pi SDK. */
-  images: PiImageContent[];
-}
-
-/**
- * Extract text and images from ACP ContentBlock array.
- * Combines all text blocks into a single string and collects image blocks.
- */
-function extractContentFromBlocks(blocks: ContentBlock[]): ExtractedContent {
-  const textParts: string[] = [];
-  const images: PiImageContent[] = [];
-
-  for (const block of blocks) {
-    if (block.type === "text") {
-      textParts.push(block.text);
-    } else if (block.type === "image") {
-      images.push({
-        type: "image",
-        data: block.data,
-        mimeType: block.mimeType,
-      });
-    } else if (block.type === "resource_link") {
-      // Include resource link text as baseline support (Bug 9 fix)
-      const resourceBlock = block as { uri?: string; text?: string };
-      if (resourceBlock.text) {
-        textParts.push(resourceBlock.text);
-      } else if (resourceBlock.uri) {
-        textParts.push(`[Resource: ${resourceBlock.uri}]`);
-      }
-    }
-    // Note: audio and embeddedResource blocks are currently ignored
-  }
-
-  return {
-    text: textParts.join("\n\n"),
-    images,
-  };
-}
-
-function getOrCreateToolCallState(
-  sessionState: AcpSessionState,
-  toolCallId: string,
-): AcpToolCallState {
-  const existing = sessionState.pendingToolCalls.get(toolCallId);
-  if (existing) {
-    return existing;
-  }
-
-  const created: AcpToolCallState = {};
-  sessionState.pendingToolCalls.set(toolCallId, created);
-  return created;
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function normalizeTokenCount(value: number): number {
-  return Math.max(0, Math.round(value));
-}
-
-function buildSessionUsageSnapshot(
-  session: NonNullable<AcpSessionState["session"]>,
-): AcpSessionUsageSnapshot | undefined {
-  const contextUsage = session.getContextUsage?.();
-  const stats = session.getSessionStats?.();
-
-  const size =
-    contextUsage?.contextWindow ??
-    stats?.contextUsage?.contextWindow ??
-    session.state.model?.contextWindow;
-
-  // Note: Pi's getContextUsage() can return { tokens: null, ... } when tokens
-  // are unknown (for example right after compaction). Prefer that value when it
-  // is numeric, otherwise fall back to stats.contextUsage.tokens.
-  const rawUsed = contextUsage?.tokens != null ? contextUsage.tokens : stats?.contextUsage?.tokens;
-
-  if (!isFiniteNumber(size) || size <= 0 || rawUsed === null || rawUsed === undefined) {
-    return undefined;
-  }
-
-  const used = rawUsed;
-
-  return {
-    size: normalizeTokenCount(size),
-    used: normalizeTokenCount(used),
-  };
-}
-
-function extractFirstChangedLine(result: unknown): number | undefined {
-  if (typeof result !== "object" || result === null) {
-    return undefined;
-  }
-
-  const details = (result as { details?: { firstChangedLine?: unknown } }).details;
-  return typeof details?.firstChangedLine === "number" ? details.firstChangedLine : undefined;
-}
-
-function isAcpTerminalRawOutput(value: unknown): value is AcpBashTerminalRawOutput {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { type?: unknown }).type === "acp_terminal"
-  );
-}
-
-function mergeCapturedRawOutput(
-  toolCallState: AcpToolCallState | undefined,
-  nextValue: unknown,
-  phase: "update" | "end",
-): unknown {
-  if (toolCallState?.toolName !== "bash" || !isAcpTerminalRawOutput(toolCallState?.rawOutput)) {
-    return nextValue;
-  }
-
-  const rawOutputRecord = toolCallState.rawOutput;
-
-  // For ACP-terminal-backed bash commands, when the command ends, populate
-  // piPartialResult.content with the actual terminal output from rawOutput.output.
-  if (phase === "end") {
-    const terminalOutput = typeof rawOutputRecord.output === "string" ? rawOutputRecord.output : "";
-    const piPartialResult = {
-      content: [{ type: "text", text: terminalOutput }],
-      details: {},
-    };
-
-    return {
-      ...rawOutputRecord,
-      piPartialResult,
-      piResult: nextValue,
-    };
-  }
-
-  return {
-    ...rawOutputRecord,
-    piPartialResult: nextValue,
-  };
-}
-
-async function releaseToolCallResources(
-  toolCallState: AcpToolCallState | undefined,
-): Promise<void> {
-  const releaseTerminal = toolCallState?.releaseTerminal;
-  if (!releaseTerminal) {
-    return;
-  }
-
-  delete toolCallState.releaseTerminal;
-
-  await releaseTerminal().catch((error) => {
-    console.warn("Failed to release ACP terminal:", error);
-  });
-}
-
-async function releasePendingToolCallResources(sessionState: AcpSessionState): Promise<void> {
-  const pendingToolCalls = Array.from(sessionState.pendingToolCalls.values());
-  await Promise.all(
-    pendingToolCalls.map((toolCallState) => releaseToolCallResources(toolCallState)),
-  );
-  sessionState.pendingToolCalls.clear();
-}
-
-// =============================================================================
-// ACP Adapter Configuration
-// =============================================================================
-
-/**
- * Configuration options for the ACP Adapter
- */
 export interface AcpAdapterConfig {
-  /** Model registry for available models */
   modelRegistry: ModelRegistry;
-  /** Default working directory */
   defaultCwd?: string;
-  /** Agent directory for Pi configuration */
   agentDir?: string;
-  /** Default thinking level if none specified */
   defaultThinkingLevel?: ThinkingLevel;
 }
 
-// =============================================================================
-// ACP Agent Implementation
-// =============================================================================
-
-/**
- * ACP Agent - bridges Pi Coding Agent to ACP protocol
- *
- * Implements the ACP Agent interface, handling:
- * - Protocol initialization and capability negotiation
- * - Session creation and lifecycle
- * - User prompt forwarding to Pi
- * - Event mapping from Pi to ACP notifications
- * - Session configuration (model, thinking level)
- * - Session close (experimental ACP capability)
- */
 export class AcpAgent implements Agent {
   private connection: AgentSideConnection;
   private sessions: Map<string, AcpSessionState>;
@@ -324,18 +94,6 @@ export class AcpAgent implements Agent {
     this.createRuntime = createRuntime;
   }
 
-  // =============================================================================
-  // ACP Agent Interface Implementation
-  // =============================================================================
-
-  /**
-   * Initialize the agent connection.
-   *
-   * Called first by the ACP client to negotiate protocol version
-   * and exchange capabilities.
-   *
-   * @returns Agent capabilities, protocol version, and authentication methods
-   */
   async initialize(params: InitializeRequest): Promise<InitializeResponse> {
     this.initialized = true;
     this.clientCapabilities = captureClientCapabilities(
@@ -371,14 +129,6 @@ export class AcpAgent implements Agent {
     };
   }
 
-  /**
-   * Create a new agent session.
-   *
-   * Sets up the working directory and initializes a Pi AgentSession.
-   *
-   * @param params - Session creation parameters (cwd, additionalDirectories, mcpServers)
-   * @returns Session ID and initial configuration options
-   */
   async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
     this.assertReadyForSessions();
 
@@ -393,10 +143,6 @@ export class AcpAgent implements Agent {
       sessionManager,
     });
 
-    // Important: delay initial session/update notifications until after the
-    // session/new response is sent. ACP clients like Zed do not know the new
-    // session id until the response arrives, so notifications sent before then
-    // can be dropped as "unknown session" updates.
     this.scheduleInitialSessionUpdates(sessionState);
 
     return {
@@ -405,12 +151,6 @@ export class AcpAgent implements Agent {
     };
   }
 
-  /**
-   * Load an existing agent session.
-   *
-   * @param params - Load session request with session ID
-   * @returns Session ID and current configuration options
-   */
   async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
     this.assertReadyForSessions();
 
@@ -440,9 +180,6 @@ export class AcpAgent implements Agent {
     };
   }
 
-  /**
-   * List persisted Pi-backed sessions.
-   */
   async unstable_listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
     if (!this.initialized) {
       throw new Error("ACP initialize() must complete before listing sessions.");
@@ -466,9 +203,6 @@ export class AcpAgent implements Agent {
     };
   }
 
-  /**
-   * Resume an existing session without replaying its history.
-   */
   async unstable_resumeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
     this.assertReadyForSessions();
 
@@ -492,190 +226,29 @@ export class AcpAgent implements Agent {
     };
   }
 
-  /**
-   * Send a user prompt to the agent.
-   *
-   * Forwards the prompt to Pi AgentSession and streams events back
-   * to the ACP client via session notifications.
-   *
-   * @param params - Prompt request with content blocks and session ID
-   * @returns Stop reason indicating why the agent stopped
-   */
   async prompt(params: PromptRequest): Promise<PromptResponse> {
     const sessionState = this.sessions.get(params.sessionId);
 
-    if (!sessionState?.session) {
+    if (!sessionState) {
       throw new Error(`Session ${params.sessionId} not found or not initialized`);
     }
 
-    const session = sessionState.session;
-
-    // Extract text and images from content blocks
-    const { text: rawUserText, images } = extractContentFromBlocks(params.prompt);
-
-    if (!rawUserText.trim() && images.length === 0) {
-      return {
-        stopReason: "end_turn",
-      };
-    }
-
-    // Resolve @path patterns (Gemini CLI feature parity)
-    const userText = await resolvePromptPathsInText({
-      text: rawUserText,
-      cwd: sessionState.cwd,
-      additionalDirectories: sessionState.additionalDirectories,
+    return executePrompt({
       connection: this.connection,
-      sessionId: params.sessionId,
+      request: params,
+      sessionState,
       clientCapabilities: this.clientCapabilities,
+      refreshSessionUsage: (state, force) => this.refreshSessionUsage(state, force),
+      refreshConfigOptions: (state, force) => this.refreshConfigOptions(state, force),
+      refreshSessionMetadata: (state, force) => this.refreshSessionMetadata(state, force),
+      refreshAvailableCommands: (state, force) => this.refreshAvailableCommands(state, force),
     });
-
-    // Subscribe to Pi events and forward to ACP connection.
-    // AgentSession listeners are synchronous, so we serialize ACP notifications
-    // ourselves to preserve start -> in_progress -> completed ordering.
-    let sessionUpdateQueue: Promise<void> = Promise.resolve();
-    const enqueueSessionUpdate = (work: () => Promise<void>) => {
-      sessionUpdateQueue = sessionUpdateQueue.then(work, work);
-    };
-
-    const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
-      const eventType = (event as { type?: string }).type;
-      let toolCallState: AcpToolCallState | undefined;
-      let completedToolCallId: string | undefined;
-
-      if (eventType === "tool_execution_start") {
-        const toolEvent = event as {
-          toolCallId: string;
-          toolName: string;
-          args: unknown;
-        };
-        toolCallState = getOrCreateToolCallState(sessionState, toolEvent.toolCallId);
-        toolCallState.toolName = toolEvent.toolName;
-        toolCallState.rawInput = toolEvent.args;
-      } else if (eventType === "tool_execution_update") {
-        const toolEvent = event as {
-          toolCallId: string;
-          toolName?: string;
-          partialResult: unknown;
-        };
-        toolCallState = sessionState.pendingToolCalls.get(toolEvent.toolCallId);
-        if (toolCallState) {
-          toolCallState.toolName ??= toolEvent.toolName;
-          toolCallState.rawOutput = mergeCapturedRawOutput(
-            toolCallState,
-            toolEvent.partialResult,
-            "update",
-          );
-        }
-      } else if (eventType === "tool_execution_end") {
-        const toolEvent = event as {
-          toolCallId: string;
-          toolName?: string;
-          result: unknown;
-        };
-        completedToolCallId = toolEvent.toolCallId;
-        toolCallState = sessionState.pendingToolCalls.get(toolEvent.toolCallId);
-        if (toolCallState) {
-          toolCallState.toolName ??= toolEvent.toolName;
-          toolCallState.rawOutput = mergeCapturedRawOutput(toolCallState, toolEvent.result, "end");
-          const firstChangedLine = extractFirstChangedLine(toolEvent.result);
-          if (firstChangedLine !== undefined) {
-            toolCallState.firstChangedLine = firstChangedLine;
-          }
-        }
-      }
-
-      // Map Pi event to ACP notification and send.
-      const notification = mapAgentEvent(params.sessionId, event, {
-        cwd: sessionState.cwd,
-        toolCallState,
-      });
-
-      const finishedToolCallId = completedToolCallId;
-      const finishedToolCallState = toolCallState;
-      const shouldRefreshUsageAfterEvent = eventType === "tool_execution_end";
-      if (finishedToolCallId) {
-        sessionState.pendingToolCalls.delete(finishedToolCallId);
-      }
-
-      enqueueSessionUpdate(async () => {
-        try {
-          if (notification) {
-            await this.connection.sessionUpdate(notification);
-          }
-
-          if (shouldRefreshUsageAfterEvent) {
-            await this.refreshSessionUsage(sessionState).catch((error) => {
-              console.warn(`Failed to refresh session usage for ${params.sessionId}:`, error);
-            });
-            await this.refreshConfigOptions(sessionState).catch((error) => {
-              console.warn(
-                `Failed to refresh session config options for ${params.sessionId}:`,
-                error,
-              );
-            });
-          }
-        } catch (err) {
-          console.error(`Failed to send session update for ${params.sessionId}:`, err);
-        } finally {
-          if (finishedToolCallState && finishedToolCallId) {
-            await releaseToolCallResources(finishedToolCallState);
-          }
-        }
-      });
-    });
-
-    try {
-      // Forward prompt to Pi with images if present
-      await session.prompt(userText, images.length > 0 ? { images } : undefined);
-
-      // Bug 1 fix: Map Pi's stopReason to ACP's StopReason
-      const lastMessage = session.state.messages[session.state.messages.length - 1];
-      let stopReason: import("@agentclientprotocol/sdk").StopReason = "end_turn";
-
-      if (lastMessage && lastMessage.role === "assistant") {
-        const assistantMsg = lastMessage as { stopReason?: string };
-        stopReason = mapStopReason(assistantMsg.stopReason);
-      }
-
-      return {
-        stopReason,
-      };
-    } catch (error) {
-      console.error(`Prompt error for session ${params.sessionId}:`, error);
-
-      // Re-throw so the ACP SDK reports the error as a protocol failure.
-      // Returning 'end_turn' would make the client think the agent completed normally.
-      throw error;
-    } finally {
-      unsubscribe();
-      await sessionUpdateQueue;
-      await this.refreshSessionUsage(sessionState).catch((error) => {
-        console.warn(`Failed to refresh session usage for ${params.sessionId}:`, error);
-      });
-      await this.refreshConfigOptions(sessionState).catch((error) => {
-        console.warn(`Failed to refresh session config options for ${params.sessionId}:`, error);
-      });
-      await this.refreshSessionMetadata(sessionState).catch((error) => {
-        console.warn(`Failed to refresh session metadata for ${params.sessionId}:`, error);
-      });
-      await this.refreshAvailableCommands(sessionState).catch((error) => {
-        console.warn(`Failed to refresh slash commands for ${params.sessionId}:`, error);
-      });
-    }
   }
 
-  /**
-   * Cancel an in-progress prompt.
-   *
-   * Aborts the Pi AgentSession's current operation.
-   *
-   * @param params - Cancel notification with session ID
-   */
   async cancel(params: CancelNotification): Promise<void> {
     const sessionState = this.sessions.get(params.sessionId);
 
     if (!sessionState?.session) {
-      // Session not found - nothing to cancel
       return;
     }
 
@@ -683,18 +256,9 @@ export class AcpAgent implements Agent {
       await sessionState.session.abort();
     } catch (error) {
       console.error(`Cancel error for session ${params.sessionId}:`, error);
-      // Don't throw - cancel is best-effort
     }
   }
 
-  /**
-   * Set a session configuration option.
-   *
-   * Handles model selection and thinking level changes.
-   *
-   * @param params - Config option request with session ID and new value
-   * @returns Updated config options reflecting the change
-   */
   async setSessionConfigOption(
     params: SetSessionConfigOptionRequest,
   ): Promise<SetSessionConfigOptionResponse> {
@@ -705,8 +269,6 @@ export class AcpAgent implements Agent {
     }
 
     const availableModels = getAvailableModels(this.config.modelRegistry);
-
-    // Handle the config option change (Bug 4 fix: now async, awaits setModel)
     const result = await handleSetSessionConfigOption(params, sessionState, availableModels);
 
     if (!result.applied) {
@@ -729,14 +291,6 @@ export class AcpAgent implements Agent {
     return response;
   }
 
-  /**
-   * Acknowledge completion of a client-run authentication flow.
-   *
-   * For ACP terminal auth, the client launches this same binary in a separate
-   * interactive terminal. That child process updates Pi's auth.json. The ACP
-   * client then calls authenticate(methodId) on the long-lived ACP connection so
-   * we can reload credentials and refresh session model lists.
-   */
   async authenticate(params: AuthenticateRequest): Promise<AuthenticateResponse> {
     const providerId = getProviderIdFromTerminalAuthMethodId(params.methodId);
     if (!providerId) {
@@ -766,66 +320,33 @@ export class AcpAgent implements Agent {
     return {};
   }
 
-  // =============================================================================
-  // Experimental ACP Capabilities
-  // =============================================================================
-
-  /**
-   * Close a session (experimental ACP capability).
-   *
-   * Cleans up the session and removes it from the session map.
-   * Prevents memory leak from accumulating sessions.
-   *
-   * MUST be named `unstable_closeSession` — that is the method name the
-   * ACP SDK calls when the client sends a session/close request.
-   *
-   * @param params - Close session request with session ID
-   */
   async unstable_closeSession(params: CloseSessionRequest): Promise<CloseSessionResponse> {
     await this.closeSession(params.sessionId);
     return {};
   }
 
-  // =============================================================================
-  // Session Management Helpers
-  // =============================================================================
-
-  /**
-   * Get the normalized ACP client capabilities captured during initialize().
-   */
   getClientCapabilities(): AcpClientCapabilitiesSnapshot {
     return this.clientCapabilities;
   }
 
-  /**
-   * Get a session by ID.
-   */
   getSession(sessionId: string): AcpSessionState | undefined {
     return this.sessions.get(sessionId);
   }
 
-  /**
-   * Check if a session exists.
-   */
   hasSession(sessionId: string): boolean {
     return this.sessions.has(sessionId);
   }
 
-  /**
-   * Get all active session IDs.
-   */
   getSessionIds(): string[] {
     return Array.from(this.sessions.keys());
   }
 
   private getConfigOptions(sessionState: AcpSessionState) {
-    const configOptions = getCurrentConfigOptions(
+    return getSessionConfigOptions(
       sessionState,
-      getAvailableModels(this.config.modelRegistry),
+      this.config.modelRegistry,
       this.clientCapabilities.clientInfo,
     );
-    sessionState.lastConfigOptions = configOptions;
-    return configOptions;
   }
 
   private async createSessionState(options: {
@@ -913,101 +434,39 @@ export class AcpAgent implements Agent {
     sessionState: AcpSessionState,
     force = false,
   ): Promise<void> {
-    if (!sessionState.session) {
-      return;
-    }
-
-    const metadata = getCurrentSessionMetadata(sessionState.session);
-    const changed =
-      force ||
-      sessionState.title !== metadata.title ||
-      sessionState.updatedAt !== metadata.updatedAt;
-
-    if (!changed) {
-      return;
-    }
-
-    sessionState.title = metadata.title;
-    sessionState.updatedAt = metadata.updatedAt;
-    await emitSessionInfoUpdate(this.connection, sessionState.sessionId, metadata);
+    return refreshSessionMetadataForSession(this.connection, sessionState, force);
   }
 
   private async refreshSessionUsage(sessionState: AcpSessionState, force = false): Promise<void> {
-    if (!sessionState.session) {
-      return;
-    }
-
-    const usage = buildSessionUsageSnapshot(sessionState.session);
-    if (!usage) {
-      return;
-    }
-
-    const changed =
-      force ||
-      sessionState.lastUsageUpdate?.size !== usage.size ||
-      sessionState.lastUsageUpdate?.used !== usage.used;
-
-    if (!changed) {
-      return;
-    }
-
-    sessionState.lastUsageUpdate = usage;
-    await emitUsageUpdate(this.connection, sessionState.sessionId, usage);
+    return refreshSessionUsageForSession(this.connection, sessionState, force);
   }
 
   private async refreshConfigOptions(sessionState: AcpSessionState, force = false): Promise<void> {
-    const configOptions = getCurrentConfigOptions(
+    return refreshConfigOptionsForSession(
+      this.connection,
       sessionState,
-      getAvailableModels(this.config.modelRegistry),
+      this.config.modelRegistry,
       this.clientCapabilities.clientInfo,
+      force,
     );
-
-    if (!force && areSessionConfigOptionsEqual(sessionState.lastConfigOptions, configOptions)) {
-      return;
-    }
-
-    sessionState.lastConfigOptions = configOptions;
-    await emitConfigOptionsUpdate(this.connection, sessionState.sessionId, configOptions);
   }
 
   private scheduleInitialSessionUpdates(sessionState: AcpSessionState): void {
-    setTimeout(() => {
-      void this.refreshSessionMetadata(sessionState, true).catch((error) => {
-        console.warn(
-          `Failed to send initial session metadata for ${sessionState.sessionId}:`,
-          error,
-        );
-      });
-      void this.refreshSessionUsage(sessionState, true).catch((error) => {
-        console.warn(`Failed to send initial session usage for ${sessionState.sessionId}:`, error);
-      });
-      void this.refreshAvailableCommands(sessionState, true).catch((error) => {
-        console.warn(`Failed to send initial slash commands for ${sessionState.sessionId}:`, error);
-      });
-    }, 0);
+    scheduleInitialUpdates({
+      sessionState,
+      refreshSessionMetadata: (state, force) => this.refreshSessionMetadata(state, force),
+      refreshSessionUsage: (state, force) => this.refreshSessionUsage(state, force),
+      refreshAvailableCommands: (state, force) => this.refreshAvailableCommands(state, force),
+    });
   }
 
   private async refreshAvailableCommands(
     sessionState: AcpSessionState,
     force = false,
   ): Promise<void> {
-    const getSlashCommands = sessionState.getSlashCommands;
-    if (!getSlashCommands) {
-      return;
-    }
-
-    const availableCommands = buildAcpAvailableCommands(getSlashCommands());
-    if (!force && areAvailableCommandsEqual(sessionState.availableCommands, availableCommands)) {
-      return;
-    }
-
-    sessionState.availableCommands = availableCommands;
-    await emitAvailableCommandsUpdate(this.connection, sessionState.sessionId, availableCommands);
+    return refreshAvailableCommandsForSession(this.connection, sessionState, force);
   }
 
-  /**
-   * Close and remove a session.
-   */
   async closeSession(sessionId: string): Promise<void> {
     const sessionState = this.sessions.get(sessionId);
 
@@ -1028,9 +487,6 @@ export class AcpAgent implements Agent {
     }
   }
 
-  /**
-   * Close all sessions and clean up resources.
-   */
   async shutdown(): Promise<void> {
     for (const sessionId of Array.from(this.sessions.keys())) {
       await this.closeSession(sessionId);

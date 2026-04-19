@@ -1,422 +1,33 @@
-/**
- * ACP Event Mapper
- *
- * Maps Pi AgentSession events to ACP SessionNotification protocol messages.
- */
-
-import { homedir } from "node:os";
-import { isAbsolute, resolve as resolvePath } from "node:path";
-
 import type {
-  SessionNotification,
-  ToolCall,
-  ToolCallUpdate,
-  ToolCallContent,
-  ToolCallLocation,
   ContentChunk,
+  SessionNotification,
   StopReason,
+  ToolCall,
+  ToolCallContent,
   ToolCallStatus,
-  ContentBlock,
+  ToolCallUpdate,
 } from "@agentclientprotocol/sdk";
-
+import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import type { AssistantMessageEvent } from "@mariozechner/pi-ai";
 import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
 
-import type { AgentEvent } from "@mariozechner/pi-agent-core";
-
-import type { AssistantMessageEvent } from "@mariozechner/pi-ai";
-
+import { createDiffContent, createToolCallContent, mapStopReason, mapToolKind } from "./types.js";
 import {
-  type AcpToolCallState,
-  mapToolKind,
-  mapStopReason,
-  createStructuredToolCallContent,
-  createToolCallContent,
-  createDiffContent,
-  createTerminalContent,
-  TOOL_NAME_META_KEY,
-} from "./types.js";
+  extractTextFromUnknown,
+  mapTerminalToolContent,
+  mapToolResultContent,
+} from "./events/toolContent.js";
+import {
+  buildToolLocations,
+  buildToolMeta,
+  buildToolTitle,
+  getToolArgs,
+  getToolName,
+  type ToolEventMappingContext,
+} from "./events/toolPresentation.js";
 
-/** Extra context available while mapping Pi tool events to ACP. */
-export interface ToolEventMappingContext {
-  /** Session working directory, used to normalize tool paths for ACP locations. */
-  cwd?: string;
-  /** Per-tool-call state captured by the adapter/runtime. */
-  toolCallState?: AcpToolCallState;
-}
+export type { ToolEventMappingContext } from "./events/toolPresentation.js";
 
-// =============================================================================
-// Path / Title Helpers
-// =============================================================================
-
-/**
- * Converts an absolute path to a display path.
- * - If the path is within the project (cwd), returns a project-relative path
- * - If the path is outside the project, returns the absolute path
- */
-function toDisplayPath(absolutePath: string, cwd?: string): string {
-  if (!cwd || !absolutePath || absolutePath.length === 0) {
-    return absolutePath;
-  }
-
-  // Normalize paths for comparison (handle trailing separators)
-  const normalizedCwd = cwd.endsWith("/") ? cwd.slice(0, -1) : cwd;
-
-  // Check if path is exactly the cwd
-  if (absolutePath === normalizedCwd) {
-    return ".";
-  }
-
-  // Check if path starts with cwd + separator
-  const prefix = `${normalizedCwd}/`;
-  if (absolutePath.startsWith(prefix)) {
-    return absolutePath.slice(prefix.length);
-  }
-
-  // Path is outside project, keep absolute
-  return absolutePath;
-}
-
-function expandToolPath(filePath: string): string {
-  if (filePath === "~") {
-    return homedir();
-  }
-
-  if (filePath.startsWith("~/")) {
-    return `${homedir()}${filePath.slice(1)}`;
-  }
-
-  return filePath.startsWith("@") ? filePath.slice(1) : filePath;
-}
-
-function resolveToolPath(filePath: string, cwd?: string): string {
-  const expanded = expandToolPath(filePath);
-  if (isAbsolute(expanded) || !cwd) {
-    return expanded;
-  }
-  return resolvePath(cwd, expanded);
-}
-
-function getToolArgs(args: unknown): Record<string, unknown> {
-  return typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
-}
-
-function getToolName(
-  context: ToolEventMappingContext | undefined,
-  fallback?: string,
-): string | undefined {
-  return context?.toolCallState?.toolName ?? fallback;
-}
-
-function getPathArg(args: Record<string, unknown>): string | undefined {
-  return typeof args.path === "string"
-    ? args.path
-    : typeof args.file_path === "string"
-      ? args.file_path
-      : undefined;
-}
-
-function getAbsoluteToolPath(
-  args: Record<string, unknown>,
-  context?: ToolEventMappingContext,
-): string | undefined {
-  const statePath = context?.toolCallState?.path;
-  if (typeof statePath === "string" && statePath.length > 0) {
-    return statePath;
-  }
-
-  const pathArg = getPathArg(args);
-  return pathArg ? resolveToolPath(pathArg, context?.cwd) : undefined;
-}
-
-function buildToolTitle(
-  toolName: string | undefined,
-  args: Record<string, unknown>,
-  context?: ToolEventMappingContext,
-): string {
-  const path = getAbsoluteToolPath(args, context);
-  const displayPath = path ? toDisplayPath(path, context?.cwd) : undefined;
-
-  switch (toolName) {
-    case "read":
-      return displayPath ? `Read ${displayPath}` : "Read file";
-    case "edit":
-      return displayPath ? `Edit ${displayPath}` : "Edit file";
-    case "write":
-      if (context?.toolCallState?.diff?.oldText === null) {
-        return displayPath ? `Create ${displayPath}` : "Create file";
-      }
-      return displayPath ? `Write ${displayPath}` : "Write file";
-    case "bash":
-      return typeof args.command === "string" ? `Run: ${args.command}` : "Run command";
-    default:
-      return toolName ?? "Tool";
-  }
-}
-
-function buildToolLocations(
-  toolName: string | undefined,
-  args: Record<string, unknown>,
-  context?: ToolEventMappingContext,
-): ToolCallLocation[] | undefined {
-  const path = getAbsoluteToolPath(args, context);
-  if (!path) {
-    return undefined;
-  }
-
-  const location: ToolCallLocation = { path };
-
-  if (toolName === "read" && typeof args.offset === "number") {
-    location.line = args.offset;
-  }
-
-  if ((toolName === "edit" || toolName === "write") && context?.toolCallState?.firstChangedLine) {
-    location.line = context.toolCallState.firstChangedLine;
-  }
-
-  return [location];
-}
-
-// =============================================================================
-// Tool Result Content Mapping
-// =============================================================================
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function getOptionalObjectField(
-  record: Record<string, unknown>,
-  field: string,
-): Record<string, unknown> | null | undefined {
-  const value = record[field];
-  return value === null ? null : isRecord(value) ? value : undefined;
-}
-
-function getOptionalStringField(
-  record: Record<string, unknown>,
-  field: string,
-): string | undefined {
-  return typeof record[field] === "string" ? (record[field] as string) : undefined;
-}
-
-function getOptionalNumberField(
-  record: Record<string, unknown>,
-  field: string,
-): number | undefined {
-  return typeof record[field] === "number" ? (record[field] as number) : undefined;
-}
-
-function mapPiContentBlock(block: unknown): ContentBlock | undefined {
-  if (!isRecord(block)) {
-    return undefined;
-  }
-
-  if (block.type === "text" && typeof block.text === "string") {
-    return {
-      type: "text",
-      text: block.text,
-      ...(getOptionalObjectField(block, "_meta") !== undefined
-        ? { _meta: getOptionalObjectField(block, "_meta") }
-        : {}),
-    } satisfies ContentBlock;
-  }
-
-  const mimeType =
-    getOptionalStringField(block, "mimeType") ?? getOptionalStringField(block, "mime_type");
-
-  if (block.type === "image" && typeof block.data === "string" && mimeType) {
-    return {
-      type: "image",
-      data: block.data,
-      mimeType,
-      ...(getOptionalStringField(block, "uri")
-        ? { uri: getOptionalStringField(block, "uri") }
-        : {}),
-      ...(getOptionalObjectField(block, "_meta") !== undefined
-        ? { _meta: getOptionalObjectField(block, "_meta") }
-        : {}),
-    } satisfies ContentBlock;
-  }
-
-  if (block.type === "audio" && typeof block.data === "string" && mimeType) {
-    return {
-      type: "audio",
-      data: block.data,
-      mimeType,
-      ...(getOptionalObjectField(block, "_meta") !== undefined
-        ? { _meta: getOptionalObjectField(block, "_meta") }
-        : {}),
-    } satisfies ContentBlock;
-  }
-
-  if (
-    block.type === "resource_link" &&
-    typeof block.name === "string" &&
-    typeof block.uri === "string"
-  ) {
-    return {
-      type: "resource_link",
-      name: block.name,
-      uri: block.uri,
-      ...(getOptionalStringField(block, "title")
-        ? { title: getOptionalStringField(block, "title") }
-        : {}),
-      ...(getOptionalStringField(block, "description")
-        ? { description: getOptionalStringField(block, "description") }
-        : {}),
-      ...(mimeType ? { mimeType } : {}),
-      ...(getOptionalNumberField(block, "size") !== undefined
-        ? { size: getOptionalNumberField(block, "size") }
-        : {}),
-      ...(getOptionalObjectField(block, "_meta") !== undefined
-        ? { _meta: getOptionalObjectField(block, "_meta") }
-        : {}),
-    } satisfies ContentBlock;
-  }
-
-  if (block.type === "resource") {
-    const resource = getOptionalObjectField(block, "resource");
-    if (!resource || typeof resource.uri !== "string") {
-      return undefined;
-    }
-
-    const resourceMimeType =
-      getOptionalStringField(resource, "mimeType") ?? getOptionalStringField(resource, "mime_type");
-    const embeddedResource =
-      typeof resource.text === "string"
-        ? {
-            text: resource.text,
-            uri: resource.uri,
-            ...(resourceMimeType ? { mimeType: resourceMimeType } : {}),
-            ...(getOptionalObjectField(resource, "_meta") !== undefined
-              ? { _meta: getOptionalObjectField(resource, "_meta") }
-              : {}),
-          }
-        : typeof resource.blob === "string"
-          ? {
-              blob: resource.blob,
-              uri: resource.uri,
-              ...(resourceMimeType ? { mimeType: resourceMimeType } : {}),
-              ...(getOptionalObjectField(resource, "_meta") !== undefined
-                ? { _meta: getOptionalObjectField(resource, "_meta") }
-                : {}),
-            }
-          : undefined;
-
-    if (!embeddedResource) {
-      return undefined;
-    }
-
-    return {
-      type: "resource",
-      resource: embeddedResource,
-      ...(getOptionalObjectField(block, "_meta") !== undefined
-        ? { _meta: getOptionalObjectField(block, "_meta") }
-        : {}),
-    } satisfies ContentBlock;
-  }
-
-  return undefined;
-}
-
-function mapPiContentBlockToAcp(block: unknown): ToolCallContent | undefined {
-  const content = mapPiContentBlock(block);
-  return content ? createStructuredToolCallContent(content) : undefined;
-}
-
-function mapStructuredToolResultContent(result: unknown): ToolCallContent[] | undefined {
-  if (typeof result !== "object" || result === null) {
-    return undefined;
-  }
-
-  const content = (result as { content?: unknown }).content;
-  if (!Array.isArray(content) || content.length === 0) {
-    return undefined;
-  }
-
-  const mapped = content.map(mapPiContentBlockToAcp).filter(Boolean) as ToolCallContent[];
-  return mapped.length > 0 ? mapped : undefined;
-}
-
-function extractTextFromUnknown(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value;
-  }
-
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-
-  const record = value as Record<string, unknown>;
-  const textFields = ["stdout", "content", "output", "result", "message", "text", "data", "stderr"];
-
-  for (const field of textFields) {
-    if (typeof record[field] === "string") {
-      return record[field] as string;
-    }
-  }
-
-  for (const field of textFields) {
-    if (Array.isArray(record[field])) {
-      const parts: string[] = [];
-
-      for (const item of record[field] as unknown[]) {
-        if (typeof item === "string") {
-          parts.push(item);
-          continue;
-        }
-
-        if (typeof item === "object" && item !== null) {
-          const objectItem = item as Record<string, unknown>;
-          if (typeof objectItem.text === "string") {
-            parts.push(objectItem.text);
-          } else if (typeof objectItem.path === "string") {
-            parts.push(objectItem.path);
-          } else if (typeof objectItem.match === "string") {
-            parts.push(objectItem.match);
-          }
-        }
-      }
-
-      if (parts.length > 0) {
-        return parts.join("\n");
-      }
-    }
-  }
-
-  if (typeof record.exitCode === "number") {
-    return `Exit code: ${record.exitCode}`;
-  }
-
-  return undefined;
-}
-
-function mapToolResultContent(result: unknown): ToolCallContent[] | undefined {
-  const structuredContent = mapStructuredToolResultContent(result);
-  if (structuredContent && structuredContent.length > 0) {
-    return structuredContent;
-  }
-
-  const text = extractTextFromUnknown(result);
-  return text ? [createToolCallContent(text)] : undefined;
-}
-
-function mapTerminalToolContent(context?: ToolEventMappingContext): ToolCallContent[] | undefined {
-  const terminalId = context?.toolCallState?.terminalId;
-  return terminalId ? [createTerminalContent(terminalId)] : undefined;
-}
-
-function buildToolMeta(toolName: string | undefined): Record<string, unknown> | undefined {
-  return toolName ? { [TOOL_NAME_META_KEY]: toolName } : undefined;
-}
-
-// =============================================================================
-// Message Chunk Mapping
-// =============================================================================
-
-/**
- * Map a message_update event to an agent_message_chunk or agent_thought_chunk notification
- */
 export function mapMessageUpdate(
   sessionId: string,
   event: AgentEvent & { type: "message_update"; assistantMessageEvent: AssistantMessageEvent },
@@ -448,9 +59,6 @@ export function mapMessageUpdate(
   return undefined;
 }
 
-/**
- * Convert tool execution start to an ACP ToolCall notification.
- */
 export function mapToolExecutionStart(
   sessionId: string,
   event: { toolCallId: string; toolName: string; args: unknown },
@@ -478,9 +86,6 @@ export function mapToolExecutionStart(
   };
 }
 
-/**
- * Convert a tool execution update event to an ACP ToolCallUpdate notification.
- */
 export function mapToolExecutionUpdate(
   sessionId: string,
   event: { toolCallId: string; toolName?: string; args?: unknown; partialResult: unknown },
@@ -489,7 +94,7 @@ export function mapToolExecutionUpdate(
   const args = getToolArgs(event.args ?? context?.toolCallState?.rawInput);
   const toolName = getToolName(context, event.toolName);
 
-  const mutationDiffContent =
+  const mutationDiffContent: ToolCallContent[] | undefined =
     (toolName === "edit" || toolName === "write") && context?.toolCallState?.diff
       ? [
           createDiffContent(
@@ -522,9 +127,6 @@ export function mapToolExecutionUpdate(
   };
 }
 
-/**
- * Convert a tool execution end event to an ACP ToolCallUpdate notification.
- */
 export function mapToolExecutionEnd(
   sessionId: string,
   event: {
@@ -576,13 +178,6 @@ export function mapToolExecutionEnd(
   };
 }
 
-// =============================================================================
-// Main Event Mapper
-// =============================================================================
-
-/**
- * Main function to map any Pi AgentSessionEvent to an ACP SessionNotification
- */
 export function mapAgentEvent(
   sessionId: string,
   event: AgentSessionEvent,
@@ -636,8 +231,6 @@ export function mapAgentEvent(
       case "agent_end":
       case "message_end":
       case "turn_end":
-        return undefined;
-
       case "agent_start":
       case "turn_start":
       case "message_start":
@@ -648,9 +241,6 @@ export function mapAgentEvent(
   return undefined;
 }
 
-/**
- * Get stop reason from agent end event
- */
 export function getStopReasonFromEnd(event: AgentEvent & { type: "agent_end" }): StopReason {
   const lastMessage = event.messages[event.messages.length - 1];
   if (lastMessage && "stopReason" in lastMessage) {
@@ -659,16 +249,9 @@ export function getStopReasonFromEnd(event: AgentEvent & { type: "agent_end" }):
   return "end_turn";
 }
 
-/**
- * Check if an event represents the final update for a prompt turn
- */
 export function isFinalEvent(event: AgentSessionEvent): boolean {
   return (event as { type: string }).type === "agent_end";
 }
-
-// =============================================================================
-// Re-exports
-// =============================================================================
 
 export {
   mapToolKind,
