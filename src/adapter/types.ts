@@ -100,6 +100,10 @@ export interface AcpToolCallState {
   rawInput?: unknown;
   /** Latest raw Pi output captured during updates/finalization. */
   rawOutput?: unknown;
+  /** Whether a tool_call notification was already sent during the generation phase. */
+  generationNotified?: boolean;
+  /** Raw arguments last sent to the client during generation phase, for deduplication. */
+  lastNotifiedRawInput?: unknown;
 }
 
 /** Latest ACP usage snapshot emitted for a session. */

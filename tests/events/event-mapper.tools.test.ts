@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vite-plus/test";
 
 import {
+  mapMessageUpdate,
   mapToolExecutionEnd,
   mapToolExecutionStart,
   mapToolExecutionUpdate,
@@ -354,5 +355,184 @@ describe("Tool Execution End Mapping", () => {
     });
 
     expect((notification.update as any).status).toBe("failed");
+  });
+});
+
+describe("Tool Generation Phase Mapping", () => {
+  function createToolCallMessageEvent(
+    type: "toolcall_start" | "toolcall_delta" | "toolcall_end",
+    toolCall: { id: string; name: string; arguments: Record<string, unknown> },
+  ) {
+    const partial = {
+      role: "assistant" as const,
+      content: [{ type: "toolCall" as const, ...toolCall }],
+    };
+    return {
+      type: "message_update" as const,
+      assistantMessageEvent: {
+        type,
+        contentIndex: 0,
+        partial,
+      },
+      message: partial,
+    } as any;
+  }
+
+  test("mapMessageUpdate toolcall_start sends tool_call with pending status", () => {
+    const notification = mapMessageUpdate(
+      "session-123",
+      createToolCallMessageEvent("toolcall_start", {
+        id: "tc-1",
+        name: "read",
+        arguments: {},
+      }),
+      { cwd: "/workspace" },
+    );
+
+    expect(notification).toBeDefined();
+    expect(notification!.sessionId).toBe("session-123");
+    expect((notification!.update as any).sessionUpdate).toBe("tool_call");
+    expect((notification!.update as any).toolCallId).toBe("tc-1");
+    expect((notification!.update as any).status).toBe("pending");
+    expect((notification!.update as any).kind).toBe("read");
+    expect((notification!.update as any).title).toBe("Read file");
+  });
+
+  test("mapMessageUpdate toolcall_delta sends tool_call_update with partial args", () => {
+    const notification = mapMessageUpdate(
+      "session-123",
+      createToolCallMessageEvent("toolcall_delta", {
+        id: "tc-2",
+        name: "edit",
+        arguments: { path: "src/file.ts" },
+      }),
+      { cwd: "/workspace" },
+    );
+
+    expect(notification).toBeDefined();
+    expect((notification!.update as any).sessionUpdate).toBe("tool_call_update");
+    expect((notification!.update as any).toolCallId).toBe("tc-2");
+    expect((notification!.update as any).status).toBe("pending");
+    expect((notification!.update as any).title).toBe("Edit src/file.ts");
+    expect((notification!.update as any).locations).toEqual([{ path: "/workspace/src/file.ts" }]);
+    expect((notification!.update as any).rawInput).toEqual({ path: "src/file.ts" });
+  });
+
+  test("mapMessageUpdate toolcall_end sends tool_call_update with final args", () => {
+    const notification = mapMessageUpdate(
+      "session-123",
+      createToolCallMessageEvent("toolcall_end", {
+        id: "tc-3",
+        name: "bash",
+        arguments: { command: "npm install" },
+      }),
+    );
+
+    expect(notification).toBeDefined();
+    expect((notification!.update as any).sessionUpdate).toBe("tool_call_update");
+    expect((notification!.update as any).toolCallId).toBe("tc-3");
+    expect((notification!.update as any).status).toBe("pending");
+    expect((notification!.update as any).title).toBe("Run: npm install");
+    expect((notification!.update as any).kind).toBe("execute");
+  });
+
+  test("mapMessageUpdate ignores non-toolCall content", () => {
+    const partial = {
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: "hello" }],
+    };
+    const event = {
+      type: "message_update" as const,
+      assistantMessageEvent: {
+        type: "toolcall_start" as const,
+        contentIndex: 0,
+        partial,
+      },
+      message: partial,
+    } as any;
+
+    const notification = mapMessageUpdate("session-123", event);
+    expect(notification).toBeUndefined();
+  });
+
+  test("mapToolExecutionStart returns tool_call_update when generationNotified is true", () => {
+    const notification = mapToolExecutionStart(
+      "session-123",
+      {
+        toolCallId: "tc-4",
+        toolName: "read",
+        args: { path: "/test/file.ts" },
+      },
+      {
+        cwd: "/workspace",
+        toolCallState: {
+          generationNotified: true,
+          rawInput: { path: "/test/file.ts" },
+        },
+      },
+    );
+
+    expect(notification.update.sessionUpdate).toBe("tool_call_update");
+    expect((notification.update as any).toolCallId).toBe("tc-4");
+    expect((notification.update as any).status).toBe("pending");
+    expect((notification.update as any).title).toBe("Read /test/file.ts");
+  });
+
+  test("mapMessageUpdate toolcall_delta is skipped when title has not changed", () => {
+    const notification = mapMessageUpdate(
+      "session-123",
+      createToolCallMessageEvent("toolcall_delta", {
+        id: "tc-5",
+        name: "edit",
+        arguments: { path: "src/file.ts", old_string: "hello", new_string: "world" },
+      }),
+      {
+        cwd: "/workspace",
+        toolCallState: {
+          lastNotifiedRawInput: { path: "src/file.ts" },
+        },
+      },
+    );
+
+    expect(notification).toBeUndefined();
+  });
+
+  test("mapMessageUpdate toolcall_delta is sent when title changes (command appears)", () => {
+    const notification = mapMessageUpdate(
+      "session-123",
+      createToolCallMessageEvent("toolcall_delta", {
+        id: "tc-6",
+        name: "bash",
+        arguments: { command: "git status" },
+      }),
+      {
+        toolCallState: {
+          lastNotifiedRawInput: {},
+        },
+      },
+    );
+
+    expect(notification).toBeDefined();
+    expect((notification!.update as any).sessionUpdate).toBe("tool_call_update");
+    expect((notification!.update as any).title).toBe("Run: git status");
+  });
+
+  test("mapMessageUpdate toolcall_end is skipped when title has not changed", () => {
+    const notification = mapMessageUpdate(
+      "session-123",
+      createToolCallMessageEvent("toolcall_end", {
+        id: "tc-7",
+        name: "write",
+        arguments: { path: "src/new.ts", content: "full content here" },
+      }),
+      {
+        cwd: "/workspace",
+        toolCallState: {
+          lastNotifiedRawInput: { path: "src/new.ts" },
+        },
+      },
+    );
+
+    expect(notification).toBeUndefined();
   });
 });

@@ -28,9 +28,24 @@ import {
 
 export type { ToolEventMappingContext } from "./events/toolPresentation.js";
 
+function shouldNotifyToolGenerationUpdate(
+  toolName: string,
+  args: Record<string, unknown>,
+  context?: ToolEventMappingContext,
+): boolean {
+  const prevTitle = buildToolTitle(
+    toolName,
+    getToolArgs(context?.toolCallState?.lastNotifiedRawInput),
+    context,
+  );
+  const nextTitle = buildToolTitle(toolName, args, context);
+  return prevTitle !== nextTitle;
+}
+
 export function mapMessageUpdate(
   sessionId: string,
   event: AgentEvent & { type: "message_update"; assistantMessageEvent: AssistantMessageEvent },
+  context?: ToolEventMappingContext,
 ): SessionNotification | undefined {
   const { assistantMessageEvent } = event;
 
@@ -56,6 +71,67 @@ export function mapMessageUpdate(
     };
   }
 
+  if (
+    assistantMessageEvent.type === "toolcall_start" ||
+    assistantMessageEvent.type === "toolcall_delta" ||
+    assistantMessageEvent.type === "toolcall_end"
+  ) {
+    const content = assistantMessageEvent.partial.content[assistantMessageEvent.contentIndex];
+    if (!content || (content as { type?: string }).type !== "toolCall") {
+      return undefined;
+    }
+    const toolCallContent = content as {
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+    };
+
+    const toolName = toolCallContent.name;
+    const args = getToolArgs(toolCallContent.arguments);
+
+    if (assistantMessageEvent.type === "toolcall_start") {
+      const toolCall: ToolCall = {
+        toolCallId: toolCallContent.id,
+        rawInput: toolCallContent.arguments,
+        kind: mapToolKind(toolName),
+        status: "pending",
+        title: buildToolTitle(toolName, args, context),
+        locations: buildToolLocations(toolName, args, context),
+        _meta: buildToolMeta(toolName),
+      };
+
+      return {
+        sessionId,
+        update: {
+          sessionUpdate: "tool_call",
+          ...toolCall,
+        },
+      };
+    }
+
+    if (!shouldNotifyToolGenerationUpdate(toolName, args, context)) {
+      return undefined;
+    }
+
+    const toolUpdate: ToolCallUpdate = {
+      toolCallId: toolCallContent.id,
+      kind: mapToolKind(toolName),
+      rawInput: toolCallContent.arguments,
+      status: "pending",
+      title: buildToolTitle(toolName, args, context),
+      locations: buildToolLocations(toolName, args, context),
+      _meta: buildToolMeta(toolName),
+    };
+
+    return {
+      sessionId,
+      update: {
+        sessionUpdate: "tool_call_update",
+        ...toolUpdate,
+      },
+    };
+  }
+
   return undefined;
 }
 
@@ -76,6 +152,16 @@ export function mapToolExecutionStart(
     locations: buildToolLocations(toolName, args, context),
     _meta: buildToolMeta(toolName),
   };
+
+  if (context?.toolCallState?.generationNotified) {
+    return {
+      sessionId,
+      update: {
+        sessionUpdate: "tool_call_update",
+        ...toolCall,
+      },
+    };
+  }
 
   return {
     sessionId,
@@ -192,7 +278,7 @@ export function mapAgentEvent(
           type: "message_update";
           assistantMessageEvent: AssistantMessageEvent;
         };
-        return mapMessageUpdate(sessionId, msgEvent);
+        return mapMessageUpdate(sessionId, msgEvent, context);
       }
 
       case "tool_execution_start": {

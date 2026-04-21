@@ -94,12 +94,57 @@ export async function executePrompt(options: {
           toolCallState.firstChangedLine = firstChangedLine;
         }
       }
+    } else if (eventType === "message_update") {
+      const msgEvent = event as {
+        type: "message_update";
+        assistantMessageEvent: {
+          type: string;
+          contentIndex: number;
+          partial: { content: unknown[] };
+        };
+      };
+      const ame = msgEvent.assistantMessageEvent;
+      if (
+        ame.type === "toolcall_start" ||
+        ame.type === "toolcall_delta" ||
+        ame.type === "toolcall_end"
+      ) {
+        const content = ame.partial.content[ame.contentIndex];
+        if (
+          content &&
+          typeof content === "object" &&
+          (content as { type?: string }).type === "toolCall"
+        ) {
+          const toolCallContent = content as {
+            id: string;
+            name: string;
+            arguments: Record<string, unknown>;
+          };
+          toolCallState = getOrCreateToolCallState(options.sessionState, toolCallContent.id);
+          toolCallState.toolName = toolCallContent.name;
+          toolCallState.rawInput = toolCallContent.arguments;
+          if (ame.type === "toolcall_start") {
+            toolCallState.generationNotified = true;
+          }
+        }
+      }
     }
 
     const notification = mapAgentEvent(options.request.sessionId, event, {
       cwd: options.sessionState.cwd,
       toolCallState,
     });
+
+    if (notification && toolCallState && eventType === "message_update") {
+      const ame = (event as { assistantMessageEvent?: { type?: string } }).assistantMessageEvent;
+      if (
+        ame?.type === "toolcall_start" ||
+        ame?.type === "toolcall_delta" ||
+        ame?.type === "toolcall_end"
+      ) {
+        toolCallState.lastNotifiedRawInput = toolCallState.rawInput;
+      }
+    }
 
     const finishedToolCallId = completedToolCallId;
     const finishedToolCallState = toolCallState;
