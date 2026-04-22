@@ -123,9 +123,7 @@ export class AcpAgent implements Agent {
           resume: {},
         },
       },
-      authMethods: buildTerminalAuthMethods(this.config.modelRegistry.authStorage, {
-        enabled: this.clientCapabilities.supportsTerminalAuth,
-      }),
+      authMethods: buildTerminalAuthMethods(this.config.modelRegistry.authStorage),
     };
   }
 

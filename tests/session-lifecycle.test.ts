@@ -185,6 +185,7 @@ describe("AcpAgent session lifecycle", () => {
         agentDir,
         modelRegistry: {
           getAvailable: () => [],
+          authStorage: { getOAuthProviders: () => [] },
         } as any,
       },
       runtime.createRuntime,
@@ -240,6 +241,7 @@ describe("AcpAgent session lifecycle", () => {
           agentDir,
           modelRegistry: {
             getAvailable: () => [],
+            authStorage: { getOAuthProviders: () => [] },
           } as any,
         },
         runtime.createRuntime,
@@ -327,6 +329,7 @@ describe("AcpAgent session lifecycle", () => {
           agentDir,
           modelRegistry: {
             getAvailable: () => [],
+            authStorage: { getOAuthProviders: () => [] },
           } as any,
         },
         runtime.createRuntime,
@@ -448,6 +451,7 @@ describe("AcpAgent session lifecycle", () => {
         agentDir,
         modelRegistry: {
           getAvailable: () => [],
+          authStorage: { getOAuthProviders: () => [] },
         } as any,
       },
       createRuntime,
@@ -524,6 +528,7 @@ describe("AcpAgent session lifecycle", () => {
         agentDir,
         modelRegistry: {
           getAvailable: () => [],
+          authStorage: { getOAuthProviders: () => [] },
         } as any,
       },
       runtime.createRuntime,

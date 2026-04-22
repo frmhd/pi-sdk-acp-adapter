@@ -61,7 +61,6 @@ describe("terminal auth helpers", () => {
         ],
       } as any,
       {
-        enabled: true,
         currentArgv: ["node", "/tmp/pi-acp/dist/cli.mjs", "--stdio"],
       },
     );
@@ -133,7 +132,13 @@ describe("AcpAgent terminal auth", () => {
       },
     });
 
-    expect(notOptedIn.authMethods).toEqual([]);
+    expect(notOptedIn.authMethods).toMatchObject([
+      {
+        id: "terminal:anthropic",
+        type: "terminal",
+        args: [ACP_TERMINAL_AUTH_FLAG, "anthropic"],
+      },
+    ]);
     expect(agentWithoutOptIn.getClientCapabilities().supportsTerminalAuth).toBe(false);
   });
 

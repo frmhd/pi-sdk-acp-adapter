@@ -125,14 +125,9 @@ export function getProviderIdFromTerminalAuthMethodId(methodId: string): string 
 export function buildTerminalAuthMethods(
   authStorage: Pick<AuthStorage, "getOAuthProviders">,
   options: {
-    enabled: boolean;
     currentArgv?: string[];
-  },
+  } = {},
 ): AuthMethod[] {
-  if (!options.enabled) {
-    return [];
-  }
-
   const currentArgv = options.currentArgv ?? process.argv;
 
   return authStorage
