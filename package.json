@@ -1,6 +1,6 @@
 {
   "name": "@frmhd/pi-sdk-acp-adapter",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "ACP adapter for Pi Coding Agent SDK - bridges Pi to ACP-compatible clients like Zed, JetBrains IDEs, Obsidian with Agent Client plugin, etc.",
   "keywords": [
     "acp",
