@@ -5,10 +5,11 @@
  * Orchestrates:
  *   1. Code checks (lint, typecheck, tests)
  *   2. LLM-generated changelog entry (via pi CLI)
- *   3. Interactive version bump (bumpp)
- *   4. Git tag + push
- *   5. GitHub release description ready to paste
- *   6. Publish command suggestion (manual)
+ *   3. Interactive approval of changelog
+ *   4. Interactive version bump (bumpp)
+ *   5. Git tag + push
+ *   6. GitHub release with notes from changelog
+ *   7. Publish command suggestion (manual)
  *
  * Usage:
  *   node scripts/release.mjs                    # interactive: pick patch/minor/major
@@ -17,6 +18,7 @@
  *   node scripts/release.mjs --release major      # non-interactive major
  *   node scripts/release.mjs --model sonnet       # use specific pi model
  *   node scripts/release.mjs --dry-run --skip-checks
+ *   node scripts/release.mjs --yes               # auto-approve changelog
  *
  * Changelog generation requires the pi CLI to be installed and authenticated.
  * If pi is unavailable, the script falls back to a manual/agent prompt file.
@@ -45,6 +47,7 @@ const piModel = modelFlagIdx !== -1 ? args[modelFlagIdx + 1] : undefined;
 
 const releaseFlagIdx = args.indexOf("--release");
 const releaseType = releaseFlagIdx !== -1 ? args[releaseFlagIdx + 1] : undefined;
+const yes = args.includes("--yes") || args.includes("-y");
 
 function log(...xs) {
   if (!quiet) console.log(...xs);
@@ -278,29 +281,14 @@ if (existsSync(CHANGELOG_FILE)) {
   changelogBody =
     "# Changelog\n\nAll notable changes to this project will be documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).\n\n";
 }
+const originalChangelog = changelogBody;
 
-if (nextVersion) {
-  // Non-interactive path: we know the version, write a versioned header
-  const versionHeader = `## [${nextVersion}] - ${todayIso()}`;
-  const unreleasedHeader = "## [Unreleased]";
-
-  if (!changelogBody.includes(unreleasedHeader)) {
-    changelogBody += `\n${unreleasedHeader}\n\n`;
-  }
-
-  const entryText = `\n${changelogEntry}\n`;
-  changelogBody = changelogBody.replace(
-    unreleasedHeader,
-    `${versionHeader}\n${entryText}\n${unreleasedHeader}`,
-  );
-} else {
-  // Interactive path: write under Unreleased; we'll version it after bumpp
-  if (!changelogBody.includes("## [Unreleased]")) {
-    changelogBody += "\n## [Unreleased]\n\n";
-  }
-  const entryText = `\n${changelogEntry}\n`;
-  changelogBody = changelogBody.replace("## [Unreleased]", "## [Unreleased]" + entryText);
+// Always write under [Unreleased]; we'll version it after bumpp
+if (!changelogBody.includes("## [Unreleased]")) {
+  changelogBody += "\n## [Unreleased]\n\n";
 }
+const entryText = `\n${changelogEntry}\n`;
+changelogBody = changelogBody.replace("## [Unreleased]", "## [Unreleased]" + entryText);
 
 if (dryRun) {
   log("[dry-run] Would write to", CHANGELOG_FILE);
@@ -311,14 +299,36 @@ if (dryRun) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Commit changelog
+// 7. Approval
 // ---------------------------------------------------------------------------
-if (!dryRun) {
-  run("git add CHANGELOG.md");
-  run('git commit -m "chore: update changelog"');
-  ok("Committed CHANGELOG.md");
+const skipApproval = yes || !!releaseType;
+
+if (!skipApproval) {
+  if (!process.stdin.isTTY) {
+    bail("Non-interactive terminal detected. Use --yes or --release to skip approval.");
+  }
+
+  log("\n📝 Proposed changelog entry:");
+  log("─────────────────────────────");
+  log(changelogEntry);
+  log("─────────────────────────────");
+
+  const answer = await new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question("Approve and continue? [Y/n] ", (ans) => {
+      rl.close();
+      resolve(ans.trim().toLowerCase());
+    });
+  });
+
+  if (answer && answer !== "y" && answer !== "yes") {
+    log("\n❌ Aborted. Restoring CHANGELOG.md…");
+    writeFileSync(CHANGELOG_FILE, originalChangelog, "utf-8");
+    process.exit(1);
+  }
+  ok("Approved");
 } else {
-  log('[dry-run] git add CHANGELOG.md && git commit -m "chore: update changelog"');
+  log("\n⏭️  Skipping approval (non-interactive / --yes)");
 }
 
 // ---------------------------------------------------------------------------
@@ -342,10 +352,13 @@ if (dryRun) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. Post-bumpp: version the changelog header & amend commit (interactive only)
+// 9. Version the changelog header & amend commit
 // ---------------------------------------------------------------------------
-if (!nextVersion && !dryRun) {
-  const bumpedVersion = JSON.parse(readFileSync("package.json", "utf-8")).version;
+const bumpedVersion = dryRun
+  ? nextVersion || "<version>"
+  : JSON.parse(readFileSync("package.json", "utf-8")).version;
+
+if (!dryRun) {
   log(`\n📝 Versioning changelog header for v${bumpedVersion}…`);
 
   changelogBody = readFileSync(CHANGELOG_FILE, "utf-8");
@@ -368,22 +381,22 @@ if (!nextVersion && !dryRun) {
 }
 
 // ---------------------------------------------------------------------------
-// 10. Push commits + tags
+// 10. Push commits + tag
 // ---------------------------------------------------------------------------
 log("\n🚀 Pushing to origin…");
 if (dryRun) {
-  log("[dry-run] git push origin main --follow-tags");
+  log("[dry-run] git push origin main");
+  log(`[dry-run] git push origin v${bumpedVersion}`);
 } else {
-  run("git push origin main --follow-tags", { stdio: "inherit" });
-  ok("Pushed commits and tags");
+  run("git push origin main", { stdio: "inherit" });
+  run(`git push origin v${bumpedVersion}`, { stdio: "inherit" });
+  ok("Pushed commits and tag");
 }
 
 // ---------------------------------------------------------------------------
-// 11. Prepare release notes & suggestions
+// 11. Create GitHub release
 // ---------------------------------------------------------------------------
-const finalVersion = dryRun
-  ? nextVersion || "<version>"
-  : JSON.parse(readFileSync("package.json", "utf-8")).version;
+const finalVersion = bumpedVersion;
 
 const finalChangelog = dryRun
   ? `## [${finalVersion}] - ${todayIso()}\n\n${changelogEntry}\n\n## [Unreleased]`
@@ -399,7 +412,7 @@ log(`   Tag     : v${finalVersion}`);
 log(`   Branch  : main (pushed)`);
 
 if (releaseNotes) {
-  log("\n   Release notes for GitHub:");
+  log("\n   Release notes:");
   log("   ─────────────────────────────");
   log(
     releaseNotes
@@ -410,19 +423,46 @@ if (releaseNotes) {
   log("   ─────────────────────────────");
 }
 
-log("\n👉  Next steps:");
-log(`   1. Publish to npm:`);
-log(`      npm publish --access public`);
-log(`\n   2. Create GitHub release:`);
-if (releaseNotes) {
-  const notesFile = ".github-release-notes.md";
-  if (!dryRun) writeFileSync(notesFile, releaseNotes, "utf-8");
-  log(
-    `      gh release create v${finalVersion} --title "v${finalVersion}" --notes-file ${notesFile}`,
-  );
-  log(`      (review ${notesFile} then run the command above)`);
+if (!dryRun) {
+  let hasGh = false;
+  try {
+    run("which gh");
+    hasGh = true;
+  } catch {
+    hasGh = false;
+  }
+
+  if (hasGh && releaseNotes) {
+    const notesFile = `.github-release-notes-v${finalVersion}.md`;
+    writeFileSync(notesFile, releaseNotes, "utf-8");
+    log("\n🚀 Creating GitHub release…");
+    run(`gh release create v${finalVersion} --title "v${finalVersion}" --notes-file ${notesFile}`, {
+      stdio: "inherit",
+    });
+    try {
+      execSync(`rm -f ${notesFile}`);
+    } catch {}
+    ok("GitHub release created");
+  } else if (hasGh) {
+    log("\n🚀 Creating GitHub release (auto-generated notes)…");
+    run(`gh release create v${finalVersion} --title "v${finalVersion}" --generate-notes`, {
+      stdio: "inherit",
+    });
+    ok("GitHub release created");
+  } else {
+    log("\n⚠️  gh CLI not found. Create the release manually:");
+    const notesFile = `.github-release-notes-v${finalVersion}.md`;
+    writeFileSync(notesFile, releaseNotes, "utf-8");
+    log(
+      `   gh release create v${finalVersion} --title "v${finalVersion}" --notes-file ${notesFile}`,
+    );
+  }
 } else {
-  log(`      gh release create v${finalVersion} --generate-notes`);
+  log("\n[dry-run] Would create GitHub release with notes:");
+  log(releaseNotes || "(no notes extracted)");
 }
+
+log("\n👉  Next step: publish to npm:");
+log(`      npm publish --access public`);
 
 log("──────────────────────────────────────────────\n");
