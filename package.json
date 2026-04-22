@@ -22,7 +22,8 @@
     "url": "git+https://github.com/frmhd/pi-sdk-acp-adapter.git"
   },
   "bin": {
-    "pi-acp": "./dist/cli.mjs"
+    "pi-acp": "./dist/cli.mjs",
+    "pi-sdk-acp-adapter": "./dist/cli.mjs"
   },
   "files": [
     "dist"
