@@ -44,10 +44,10 @@
     "prepare": "vp config"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "0.19.0",
-    "@mariozechner/pi-agent-core": "0.68.0",
-    "@mariozechner/pi-ai": "0.68.0",
-    "@mariozechner/pi-coding-agent": "0.68.0"
+    "@agentclientprotocol/sdk": "0.19.1",
+    "@mariozechner/pi-agent-core": "0.68.1",
+    "@mariozechner/pi-ai": "0.68.1",
+    "@mariozechner/pi-coding-agent": "0.68.1"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
