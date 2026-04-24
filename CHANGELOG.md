@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-04-24
+
+### Changed
+
+- Updated `@agentclientprotocol/sdk` to 0.20.0 and `@mariozechner/pi-*` to 0.70.2.
+- Session lifecycle methods (`listSessions`, `resumeSession`, `closeSession`) updated to stable SDK API (removed `unstable_` prefix).
+
+### Bug Fixes
+
+- Extension tools are now properly loaded instead of being overridden by a hardcoded default tools array.
+
 ## [0.1.4] - 2026-04-24
 
 - Updated SDK dependencies to `@mariozechner/pi-*` 0.70.0.
