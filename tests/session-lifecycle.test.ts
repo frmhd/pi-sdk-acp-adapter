@@ -582,9 +582,9 @@ describe("AcpAgent session lifecycle", () => {
     session.state.messages = [...session.sessionManager.buildSessionContext().messages];
     session.sessionName = session.sessionManager.getSessionName();
 
-    await agent.closeSession(sessionId);
+    await agent.closeSession({ sessionId } as any);
 
-    const listedForCwd = await agent.unstable_listSessions({ cwd: projectDir } as any);
+    const listedForCwd = await agent.listSessions({ cwd: projectDir } as any);
     expect(listedForCwd.nextCursor).toBeNull();
     expect(listedForCwd.sessions).toEqual(
       expect.arrayContaining([
@@ -597,7 +597,7 @@ describe("AcpAgent session lifecycle", () => {
       ]),
     );
 
-    const listedAll = await agent.unstable_listSessions({} as any);
+    const listedAll = await agent.listSessions({} as any);
     expect(listedAll.sessions.map((item: any) => item.sessionId)).toContain(sessionId);
 
     connection.sessionUpdate.mockClear();
@@ -654,7 +654,7 @@ describe("AcpAgent session lifecycle", () => {
 
     connection.sessionUpdate.mockClear();
 
-    const resumed = await agent.unstable_resumeSession({
+    const resumed = await agent.resumeSession({
       sessionId,
       cwd: projectDir,
       mcpServers: [],
@@ -674,7 +674,7 @@ describe("AcpAgent session lifecycle", () => {
     ]);
 
     const resumedSession = runtime.sessions.get(sessionId);
-    await agent.unstable_closeSession({ sessionId } as any);
+    await agent.closeSession({ sessionId } as any);
 
     expect(resumedSession.abort).toHaveBeenCalledTimes(1);
     expect(agent.hasSession(sessionId)).toBe(false);

@@ -178,7 +178,7 @@ export class AcpAgent implements Agent {
     };
   }
 
-  async unstable_listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
+  async listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
     if (!this.initialized) {
       throw new Error("ACP initialize() must complete before listing sessions.");
     }
@@ -201,7 +201,7 @@ export class AcpAgent implements Agent {
     };
   }
 
-  async unstable_resumeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+  async resumeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
     this.assertReadyForSessions();
 
     const sessionInfo = await this.findPersistedSessionInfo(params.sessionId, params.cwd);
@@ -318,8 +318,8 @@ export class AcpAgent implements Agent {
     return {};
   }
 
-  async unstable_closeSession(params: CloseSessionRequest): Promise<CloseSessionResponse> {
-    await this.closeSession(params.sessionId);
+  async closeSession(params: CloseSessionRequest): Promise<CloseSessionResponse> {
+    await this.closePiSession(params.sessionId);
     return {};
   }
 
@@ -353,7 +353,7 @@ export class AcpAgent implements Agent {
     sessionManager: SessionManager;
   }): Promise<AcpSessionState> {
     const sessionId = options.sessionManager.getSessionId();
-    await this.closeSession(sessionId);
+    await this.closePiSession(sessionId);
 
     const sessionState: AcpSessionState = {
       sessionId,
@@ -465,7 +465,7 @@ export class AcpAgent implements Agent {
     return refreshAvailableCommandsForSession(this.connection, sessionState, force);
   }
 
-  async closeSession(sessionId: string): Promise<void> {
+  private async closePiSession(sessionId: string): Promise<void> {
     const sessionState = this.sessions.get(sessionId);
 
     if (sessionState) {
@@ -487,7 +487,7 @@ export class AcpAgent implements Agent {
 
   async shutdown(): Promise<void> {
     for (const sessionId of Array.from(this.sessions.keys())) {
-      await this.closeSession(sessionId);
+      await this.closePiSession(sessionId);
     }
   }
 
