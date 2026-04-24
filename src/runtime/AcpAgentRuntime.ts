@@ -54,7 +54,6 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
     agentDir: options.agentDir,
     modelRegistry: options.modelRegistry,
     thinkingLevel: options.thinkingLevel || "medium",
-    tools: ["read", "bash", "edit", "write"],
     customTools: tools,
     sessionManager: options.sessionManager,
   };
