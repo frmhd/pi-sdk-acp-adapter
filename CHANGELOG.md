@@ -6,7 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-04-24
+
 - Updated SDK dependencies to `@mariozechner/pi-*` 0.70.0.
+
+### New Features
+
+- Added support for `@mariozechner/pi-*` 0.70.0.
+
+### Bug Fixes
+
+- Improved reliability of changelog manipulation by replacing brittle regex parsing with a structured parser.
 
 ## [0.1.3] - 2026-04-22
 
