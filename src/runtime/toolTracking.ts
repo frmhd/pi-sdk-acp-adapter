@@ -1,10 +1,8 @@
-import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
-
 import type { AcpBashTerminalRawOutput } from "../adapter/types.js";
 
 export type ToolBackend = "acp" | "local" | "hybrid";
 
-export type AcpSessionTool = ToolDefinition<any, any, any> & {
+export type AcpSessionTool = object & {
   acpBackend: ToolBackend;
 };
 
