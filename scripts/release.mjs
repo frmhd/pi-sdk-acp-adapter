@@ -99,6 +99,54 @@ function todayIso() {
 }
 
 // ---------------------------------------------------------------------------
+// Changelog parse / stringify (robust — avoids brittle regex replacements)
+// ---------------------------------------------------------------------------
+function parseChangelog(text) {
+  const sectionMatch = text.match(/## \[/);
+  const preamble = sectionMatch ? text.slice(0, sectionMatch.index).trimEnd() : text.trimEnd();
+
+  const sections = [];
+  const headerRe = /^## \[([^\]]+)\](?: - ([\d-]+))? *\n/gm;
+
+  let lastIndex = -1;
+  let lastTitle;
+  let lastDate;
+  let m;
+
+  while ((m = headerRe.exec(text)) !== null) {
+    if (lastIndex !== -1) {
+      sections.push({
+        title: lastTitle,
+        date: lastDate,
+        content: text.slice(lastIndex, m.index).trim(),
+      });
+    }
+    lastIndex = headerRe.lastIndex;
+    lastTitle = m[1];
+    lastDate = m[2] || "";
+  }
+
+  if (lastIndex !== -1) {
+    sections.push({
+      title: lastTitle,
+      date: lastDate,
+      content: text.slice(lastIndex).trim(),
+    });
+  }
+
+  return { preamble, sections };
+}
+
+function stringifyChangelog({ preamble, sections }) {
+  let out = preamble + "\n\n";
+  for (const s of sections) {
+    const header = s.date ? `## [${s.title}] - ${s.date}` : `## [${s.title}]`;
+    out += `${header}\n\n${s.content ? s.content + "\n\n" : ""}`;
+  }
+  return out.trimEnd() + "\n";
+}
+
+// ---------------------------------------------------------------------------
 // 1. Preflight checks
 // ---------------------------------------------------------------------------
 log("\n🔎 Preflight checks…");
@@ -283,12 +331,22 @@ if (existsSync(CHANGELOG_FILE)) {
 }
 const originalChangelog = changelogBody;
 
-// Always write under [Unreleased]; we'll version it after bumpp
-if (!changelogBody.includes("## [Unreleased]")) {
-  changelogBody += "\n## [Unreleased]\n\n";
+let { preamble, sections } = parseChangelog(changelogBody);
+
+let unreleased = sections.find((s) => s.title === "Unreleased");
+if (!unreleased) {
+  unreleased = { title: "Unreleased", date: "", content: "" };
+  sections.unshift(unreleased);
+} else {
+  // Ensure [Unreleased] is always the first section (Keep a Changelog format)
+  sections = sections.filter((s) => s.title !== "Unreleased");
+  sections.unshift(unreleased);
 }
-const entryText = `\n${changelogEntry}\n`;
-changelogBody = changelogBody.replace("## [Unreleased]", "## [Unreleased]" + entryText);
+
+const sep = unreleased.content.trim() ? "\n\n" : "";
+unreleased.content = unreleased.content + sep + changelogEntry.trim();
+
+changelogBody = stringifyChangelog({ preamble, sections });
 
 if (dryRun) {
   log("[dry-run] Would write to", CHANGELOG_FILE);
@@ -362,15 +420,25 @@ if (!dryRun) {
   log(`\n📝 Versioning changelog header for v${bumpedVersion}…`);
 
   changelogBody = readFileSync(CHANGELOG_FILE, "utf-8");
-  const unreleasedHeader = "## [Unreleased]";
-  const versionHeader = `## [${bumpedVersion}] - ${todayIso()}`;
+  let { preamble, sections } = parseChangelog(changelogBody);
 
-  if (changelogBody.includes(unreleasedHeader)) {
-    changelogBody = changelogBody.replace(
-      unreleasedHeader,
-      `${versionHeader}\n\n${unreleasedHeader}`,
-    );
-    writeFileSync(CHANGELOG_FILE, changelogBody, "utf-8");
+  const unreleasedIdx = sections.findIndex((s) => s.title === "Unreleased");
+  if (unreleasedIdx !== -1) {
+    const unreleased = sections[unreleasedIdx];
+
+    const versionSection = {
+      title: bumpedVersion,
+      date: todayIso(),
+      content: unreleased.content,
+    };
+
+    // Move unreleased content into the new version section and clear [Unreleased]
+    unreleased.content = "";
+
+    // Insert the new version right after [Unreleased] (descending order)
+    sections.splice(unreleasedIdx + 1, 0, versionSection);
+
+    writeFileSync(CHANGELOG_FILE, stringifyChangelog({ preamble, sections }), "utf-8");
 
     run("git add CHANGELOG.md");
     run("git commit --amend --no-edit");

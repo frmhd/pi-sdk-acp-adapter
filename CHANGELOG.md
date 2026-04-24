@@ -4,11 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.1.2] - 2026-04-22
+## [Unreleased]
+
+- Updated SDK dependencies to `@mariozechner/pi-*` 0.70.0.
 
 ## [0.1.3] - 2026-04-22
-
-## [Unreleased]
 
 ### Breaking Changes
 
@@ -18,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Added `pi-sdk-acp-adapter` as an additional CLI binary entry point.
 - Added a pi symbol icon SVG to the package assets.
+
+## [0.1.2] - 2026-04-22
 
 ### New Features
 
