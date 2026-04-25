@@ -13,6 +13,7 @@ This adapter extends Pi's capabilities by mapping its internal `read`, `edit`, `
 - [Features](#features)
 - [Client Compatibility](#client-compatibility)
 - [Quick Start](#quick-start)
+- [Configuration](#configuration)
 - [Architecture & Fallbacks](#architecture--fallbacks)
 - [Development](#development)
 
@@ -22,6 +23,9 @@ This adapter extends Pi's capabilities by mapping its internal `read`, `edit`, `
 - **Native Terminal Execution**: Maps Pi's `bash` tool to ACP terminals, providing live ANSI output, persistent processes, and native UI controls.
 - **Interactive Terminal Auth**: Exposes Pi's OAuth flows seamlessly within your IDE's terminal for seamless authentication.
 - **Context Window Tracking (Zed)**: Displays context usage and token counts in the Zed agent panel in a hacky way.
+- **Session Title Autogeneration**: Automatically generates concise session titles from the first user message when `PI_ACP_SMALL_MODEL` is configured with an authenticated model. Includes a `/regenerate-title` slash command to re-title a session from its conversation history.
+- **Agent Skills & Slash Commands**: Full support for Pi agent skills and slash commands (prompt templates), with working discovery and invocation. No extra adapter configuration is required — these work out of the box because Pi handles them natively.
+- **Subagent Extensions**: Compatible with subagent extensions such as [@tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents).
 
 ## Client Compatibility
 
@@ -65,6 +69,31 @@ Configure your ACP client to use the adapter:
 }
 ```
 
+## Configuration
+
+The adapter can be configured via environment variables passed through your ACP client:
+
+| Variable             | Description                                                                                                                                                                                                  |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `PI_ACP_SMALL_MODEL` | Small/fast model for session title autogeneration. Format: `provider/model-id` (e.g., `opencode-go/minimax-m2.7`). The provider must already be authenticated in Pi (same API key as your main model works). |
+
+Example configuration in Zed's `settings.json`:
+
+```json
+{
+  "agent_servers": {
+    "Pi": {
+      "type": "custom",
+      "command": "node",
+      "args": ["/absolute/path/to/pi-sdk-acp-adapter/dist/cli.mjs"],
+      "env": {
+        "PI_ACP_SMALL_MODEL": "opencode-go/minimax-m2.7"
+      }
+    }
+  }
+}
+```
+
 ## Architecture & Fallbacks
 
 The adapter safely degrades based on the capabilities advertised by your client during the ACP `initialize` handshake.
@@ -74,8 +103,6 @@ The adapter safely degrades based on the capabilities advertised by your client 
 - `bash` — Routed to the editor's integrated terminal when available; falls back to Pi's local shell otherwise.
 
 The adapter preserves Pi's powerful lack of restrictions on working with directories: it can read files in any directory. The editing tool **will try** to prevent it from changing files outside the working directory.
-
-The adapter also supports some subagent extensions, for example [@tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents), and has full support for agent skills and slash commands (prompt templates).
 
 ## Development
 
