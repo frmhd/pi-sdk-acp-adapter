@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-04-25
+
+### New Features
+
+- Auto-generate session titles on the first prompt using the `PI_ACP_SMALL_MODEL` environment variable.
+- Add a slash command to regenerate session titles from all user messages.
+
 ## [0.1.5] - 2026-04-24
 
 ### Changed
