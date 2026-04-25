@@ -228,30 +228,32 @@ export async function executePrompt(options: {
   const shouldGenerateTitle =
     willBeFirstUserMessage && !hasExplicitName && getSmallModelSpec() !== null;
 
+  // Kick off title generation in parallel with the main prompt — it only
+  // needs the user's text and has no dependency on the assistant's response.
+  if (shouldGenerateTitle) {
+    void (async () => {
+      // Title generation is a best-effort side effect of the first prompt.
+      // Swallow failures here so that a model/auth error does not disrupt
+      // the user's primary prompt workflow.
+      try {
+        const title = await generateSessionTitle(userText, session.modelRegistry);
+        if (title && options.sessionState.session) {
+          options.sessionState.session.setSessionName(title);
+          await options.refreshSessionMetadata(options.sessionState, true).catch((error) => {
+            console.warn(
+              `Failed to refresh session metadata after title generation for ${options.request.sessionId}:`,
+              error,
+            );
+          });
+        }
+      } catch (error) {
+        console.warn(`Title generation failed for ${options.request.sessionId}:`, error);
+      }
+    })();
+  }
+
   try {
     await session.prompt(userText, images.length > 0 ? { images } : undefined);
-
-    if (shouldGenerateTitle) {
-      void (async () => {
-        // Title generation is a best-effort side effect of the first prompt.
-        // Swallow failures here so that a model/auth error does not disrupt
-        // the user's primary prompt workflow.
-        try {
-          const title = await generateSessionTitle(userText, session.modelRegistry);
-          if (title && options.sessionState.session) {
-            options.sessionState.session.setSessionName(title);
-            await options.refreshSessionMetadata(options.sessionState, true).catch((error) => {
-              console.warn(
-                `Failed to refresh session metadata after title generation for ${options.request.sessionId}:`,
-                error,
-              );
-            });
-          }
-        } catch (error) {
-          console.warn(`Title generation failed for ${options.request.sessionId}:`, error);
-        }
-      })();
-    }
 
     const lastMessage = session.state.messages[session.state.messages.length - 1];
     let stopReason: import("@agentclientprotocol/sdk").StopReason = "end_turn";
