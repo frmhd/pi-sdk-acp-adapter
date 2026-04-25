@@ -8,7 +8,7 @@ import type { TextContent, UserMessage } from "@mariozechner/pi-ai";
 
 const SESSION_TITLE_MAX_LENGTH = 80;
 
-function normalizeSessionTitle(title: string | undefined): string | null {
+export function normalizeSessionTitle(title: string | undefined): string | null {
   if (!title) {
     return null;
   }

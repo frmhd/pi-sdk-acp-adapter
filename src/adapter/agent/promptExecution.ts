@@ -11,6 +11,7 @@ import {
   mergeCapturedRawOutput,
   releaseToolCallResources,
 } from "./toolCallState.js";
+import { generateSessionTitle, getSmallModelSpec } from "./titleGeneration.js";
 
 export async function executePrompt(options: {
   connection: AgentSideConnection;
@@ -183,8 +184,33 @@ export async function executePrompt(options: {
     });
   });
 
+  const willBeFirstUserMessage =
+    session.state.messages.filter((m) => m.role === "user").length === 0;
+  const hasExplicitName = session.sessionManager.getSessionName() !== undefined;
+  const shouldGenerateTitle =
+    willBeFirstUserMessage && !hasExplicitName && getSmallModelSpec() !== null;
+
   try {
     await session.prompt(userText, images.length > 0 ? { images } : undefined);
+
+    if (shouldGenerateTitle) {
+      void (async () => {
+        try {
+          const title = await generateSessionTitle(userText, session.modelRegistry);
+          if (title && options.sessionState.session) {
+            options.sessionState.session.setSessionName(title);
+            await options.refreshSessionMetadata(options.sessionState, true).catch((error) => {
+              console.warn(
+                `Failed to refresh session metadata after title generation for ${options.request.sessionId}:`,
+                error,
+              );
+            });
+          }
+        } catch (error) {
+          console.warn(`Title generation failed for ${options.request.sessionId}:`, error);
+        }
+      })();
+    }
 
     const lastMessage = session.state.messages[session.state.messages.length - 1];
     let stopReason: import("@agentclientprotocol/sdk").StopReason = "end_turn";
