@@ -14,6 +14,7 @@ vi.mock("@mariozechner/pi-ai", () => ({
 import { completeSimple, getEnvApiKey } from "@mariozechner/pi-ai";
 import {
   generateSessionTitle,
+  generateSessionTitleFromMessages,
   getSmallModelSpec,
 } from "../../src/adapter/agent/titleGeneration.js";
 
@@ -162,13 +163,106 @@ describe("generateSessionTitle", () => {
     expect(title).toBeNull();
   });
 
-  test("returns null and logs warning on API error", async () => {
+  test("rejects on API error", async () => {
     process.env.PI_ACP_SMALL_MODEL = "test/model";
     vi.mocked(completeSimple).mockRejectedValue(new Error("API error"));
 
     const registry = createMockModelRegistry();
-    const title = await generateSessionTitle("Hello", registry);
+    await expect(generateSessionTitle("Hello", registry)).rejects.toThrow("API error");
+  });
+});
+
+describe("generateSessionTitleFromMessages", () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+    vi.resetAllMocks();
+    vi.mocked(getEnvApiKey).mockReturnValue(undefined);
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  function createMockModelRegistry(overrides: Partial<any> = {}) {
+    return {
+      find: vi.fn(() => ({ id: "test-model", provider: "test-provider" })),
+      hasConfiguredAuth: vi.fn(() => true),
+      getApiKeyAndHeaders: vi.fn(() => Promise.resolve({ ok: true, apiKey: "test-key" })),
+      ...overrides,
+    } as any;
+  }
+
+  test("returns null for empty message array", async () => {
+    delete process.env.PI_ACP_SMALL_MODEL;
+    const registry = createMockModelRegistry();
+    const title = await generateSessionTitleFromMessages([], registry);
     expect(title).toBeNull();
+  });
+
+  test("combines user messages into prompt", async () => {
+    process.env.PI_ACP_SMALL_MODEL = "test/model";
+    vi.mocked(completeSimple).mockResolvedValue({
+      content: [{ type: "text", text: "Project Setup" }],
+    } as any);
+
+    const registry = createMockModelRegistry();
+    const title = await generateSessionTitleFromMessages(
+      ["How do I set up React?", "Also TypeScript"],
+      registry,
+    );
+
+    expect(title).toBe("Project Setup");
+    const content = vi.mocked(completeSimple).mock.calls[0]?.[1]?.messages?.[0]?.content as string;
+    expect(content).toContain("Message 1:");
+    expect(content).toContain("How do I set up React?");
+    expect(content).toContain("Message 2:");
+    expect(content).toContain("Also TypeScript");
+  });
+
+  test("truncates combined text to ~4000 characters", async () => {
+    process.env.PI_ACP_SMALL_MODEL = "test/model";
+    vi.mocked(completeSimple).mockResolvedValue({
+      content: [{ type: "text", text: "Long Topic" }],
+    } as any);
+
+    const registry = createMockModelRegistry();
+    const longMessage = "a".repeat(3000);
+    await generateSessionTitleFromMessages([longMessage, longMessage], registry);
+
+    const content = vi.mocked(completeSimple).mock.calls[0]?.[1]?.messages?.[0]?.content as string;
+    expect(content.length).toBeLessThanOrEqual(4010);
+    expect(content).toContain("[...]");
+  });
+
+  test("uses only the most recent 20 messages", async () => {
+    process.env.PI_ACP_SMALL_MODEL = "test/model";
+    vi.mocked(completeSimple).mockResolvedValue({
+      content: [{ type: "text", text: "Recent Topic" }],
+    } as any);
+
+    const registry = createMockModelRegistry();
+    const messages = Array.from({ length: 25 }, (_, i) => `User content ${i + 1}`);
+    await generateSessionTitleFromMessages(messages, registry);
+
+    const content = vi.mocked(completeSimple).mock.calls[0]?.[1]?.messages?.[0]?.content as string;
+    const messageCount = (content.match(/Message \d+:/g) || []).length;
+    expect(messageCount).toBe(20);
+    expect(content).toContain("User content 21");
+    expect(content).toContain("User content 25");
+    expect(content).not.toContain("User content 1\n");
+    expect(content).not.toContain("User content 5\n");
+  });
+
+  test("rejects on API error", async () => {
+    process.env.PI_ACP_SMALL_MODEL = "test/model";
+    vi.mocked(completeSimple).mockRejectedValue(new Error("Model overloaded"));
+
+    const registry = createMockModelRegistry();
+    await expect(generateSessionTitleFromMessages(["Hello"], registry)).rejects.toThrow(
+      "Model overloaded",
+    );
   });
 });
 
@@ -359,5 +453,296 @@ describe("AcpAgent prompt title generation integration", () => {
 
     expect(completeSimple).not.toHaveBeenCalled();
     expect(mockSession.setSessionName).not.toHaveBeenCalled();
+  });
+});
+
+describe("AcpAgent /regenerate-title slash command", () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+    vi.resetAllMocks();
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  test("generates title from all user messages", async () => {
+    process.env.PI_ACP_SMALL_MODEL = "test/tiny-model";
+    const connection = createMockConnection();
+    const mockSession = createMockSession();
+    mockSession.subscribe = vi.fn(() => () => {});
+    mockSession.prompt = vi.fn();
+    mockSession.setSessionName = vi.fn((name: string) => {
+      mockSession.sessionManager.getSessionName = vi.fn(() => name);
+    });
+
+    mockSession.state.messages = [
+      { role: "user", content: "How do I set up a React project?" },
+      { role: "assistant", content: [{ type: "text", text: "You can use create-react-app." }] },
+      { role: "user", content: "Also need TypeScript support." },
+      { role: "toolResult", toolCallId: "1", toolName: "read", content: "..." },
+      { role: "user", content: "And Tailwind CSS too." },
+    ];
+
+    mockSession.modelRegistry = {
+      find: vi.fn(() => ({ id: "tiny-model", provider: "test" })),
+      hasConfiguredAuth: vi.fn(() => true),
+      getApiKeyAndHeaders: vi.fn(() => Promise.resolve({ ok: true, apiKey: "key" })),
+    };
+
+    vi.mocked(completeSimple).mockResolvedValue({
+      content: [{ type: "text", text: "React Project Setup" }],
+    } as any);
+
+    const createRuntime = vi.fn(async () => ({
+      session: mockSession,
+      dispose: vi.fn(),
+    }));
+
+    const agent = createTestAgent(connection, createRuntime);
+
+    await agent.initialize({
+      protocolVersion: 1,
+      clientCapabilities: {},
+    });
+
+    const { sessionId } = await agent.newSession({ cwd: "/tmp/project" } as any);
+
+    const response = await agent.prompt({
+      sessionId,
+      prompt: [{ type: "text", text: "/regenerate-title" }],
+    } as any);
+
+    expect(response.stopReason).toBe("end_turn");
+    expect(mockSession.prompt).not.toHaveBeenCalled();
+    expect(completeSimple).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: "user",
+            content: expect.stringContaining("Message 1:"),
+          }),
+        ]),
+      }),
+      expect.anything(),
+    );
+
+    const callContent = vi.mocked(completeSimple).mock.calls[0]?.[1]?.messages?.[0]
+      ?.content as string;
+    expect(callContent).toContain("How do I set up a React project?");
+    expect(callContent).toContain("Also need TypeScript support.");
+    expect(callContent).toContain("And Tailwind CSS too.");
+    expect(callContent).not.toContain("create-react-app");
+
+    expect(mockSession.setSessionName).toHaveBeenCalledWith("React Project Setup");
+
+    const titleUpdate = connection.sessionUpdate.mock.calls
+      .map(([n]: [any]) => n.update)
+      .find(
+        (u: any) => u.sessionUpdate === "session_info_update" && u.title === "React Project Setup",
+      );
+    expect(titleUpdate).toBeDefined();
+  });
+
+  test("overrides existing explicit session name", async () => {
+    process.env.PI_ACP_SMALL_MODEL = "test/tiny-model";
+    const connection = createMockConnection();
+    const mockSession = createMockSession();
+    mockSession.subscribe = vi.fn(() => () => {});
+    mockSession.prompt = vi.fn();
+    mockSession.setSessionName = vi.fn();
+    mockSession.sessionManager.getSessionName = vi.fn(() => "Old Name");
+
+    mockSession.state.messages = [{ role: "user", content: "New topic about databases" }];
+
+    mockSession.modelRegistry = {
+      find: vi.fn(() => ({ id: "tiny-model", provider: "test" })),
+      hasConfiguredAuth: vi.fn(() => true),
+      getApiKeyAndHeaders: vi.fn(() => Promise.resolve({ ok: true, apiKey: "key" })),
+    };
+
+    vi.mocked(completeSimple).mockResolvedValue({
+      content: [{ type: "text", text: "Database Discussion" }],
+    } as any);
+
+    const createRuntime = vi.fn(async () => ({
+      session: mockSession,
+      dispose: vi.fn(),
+    }));
+
+    const agent = createTestAgent(connection, createRuntime);
+
+    await agent.initialize({
+      protocolVersion: 1,
+      clientCapabilities: {},
+    });
+
+    const { sessionId } = await agent.newSession({ cwd: "/tmp/project" } as any);
+
+    const response = await agent.prompt({
+      sessionId,
+      prompt: [{ type: "text", text: "/regenerate-title" }],
+    } as any);
+
+    expect(response.stopReason).toBe("end_turn");
+    expect(mockSession.setSessionName).toHaveBeenCalledWith("Database Discussion");
+  });
+
+  test("returns early when PI_ACP_SMALL_MODEL is not set", async () => {
+    delete process.env.PI_ACP_SMALL_MODEL;
+    const connection = createMockConnection();
+    const mockSession = createMockSession();
+    mockSession.subscribe = vi.fn(() => () => {});
+    mockSession.prompt = vi.fn();
+    mockSession.setSessionName = vi.fn();
+
+    mockSession.state.messages = [{ role: "user", content: "Some question" }];
+
+    const createRuntime = vi.fn(async () => ({
+      session: mockSession,
+      dispose: vi.fn(),
+    }));
+
+    const agent = createTestAgent(connection, createRuntime);
+
+    await agent.initialize({
+      protocolVersion: 1,
+      clientCapabilities: {},
+    });
+
+    const { sessionId } = await agent.newSession({ cwd: "/tmp/project" } as any);
+
+    const response = await agent.prompt({
+      sessionId,
+      prompt: [{ type: "text", text: "/regenerate-title" }],
+    } as any);
+
+    expect(response.stopReason).toBe("end_turn");
+    expect(completeSimple).not.toHaveBeenCalled();
+    expect(mockSession.setSessionName).not.toHaveBeenCalled();
+  });
+
+  test("returns early when there are no user messages", async () => {
+    process.env.PI_ACP_SMALL_MODEL = "test/tiny-model";
+    const connection = createMockConnection();
+    const mockSession = createMockSession();
+    mockSession.subscribe = vi.fn(() => () => {});
+    mockSession.prompt = vi.fn();
+    mockSession.setSessionName = vi.fn();
+
+    mockSession.state.messages = [
+      { role: "assistant", content: [{ type: "text", text: "Hello!" }] },
+      { role: "toolResult", toolCallId: "1", toolName: "read", content: "..." },
+    ];
+
+    const createRuntime = vi.fn(async () => ({
+      session: mockSession,
+      dispose: vi.fn(),
+    }));
+
+    const agent = createTestAgent(connection, createRuntime);
+
+    await agent.initialize({
+      protocolVersion: 1,
+      clientCapabilities: {},
+    });
+
+    const { sessionId } = await agent.newSession({ cwd: "/tmp/project" } as any);
+
+    const response = await agent.prompt({
+      sessionId,
+      prompt: [{ type: "text", text: "/regenerate-title" }],
+    } as any);
+
+    expect(response.stopReason).toBe("end_turn");
+    expect(completeSimple).not.toHaveBeenCalled();
+    expect(mockSession.setSessionName).not.toHaveBeenCalled();
+  });
+
+  test("propagates error when title generation fails for /regenerate-title", async () => {
+    process.env.PI_ACP_SMALL_MODEL = "test/tiny-model";
+    const connection = createMockConnection();
+    const mockSession = createMockSession();
+    mockSession.subscribe = vi.fn(() => () => {});
+    mockSession.prompt = vi.fn();
+    mockSession.setSessionName = vi.fn();
+
+    mockSession.state.messages = [{ role: "user", content: "Some question" }];
+
+    mockSession.modelRegistry = {
+      find: vi.fn(() => ({ id: "tiny-model", provider: "test" })),
+      hasConfiguredAuth: vi.fn(() => true),
+      getApiKeyAndHeaders: vi.fn(() => Promise.resolve({ ok: true, apiKey: "key" })),
+    };
+
+    vi.mocked(completeSimple).mockRejectedValue(new Error("Model overloaded"));
+
+    const createRuntime = vi.fn(async () => ({
+      session: mockSession,
+      dispose: vi.fn(),
+    }));
+
+    const agent = createTestAgent(connection, createRuntime);
+
+    await agent.initialize({
+      protocolVersion: 1,
+      clientCapabilities: {},
+    });
+
+    const { sessionId } = await agent.newSession({ cwd: "/tmp/project" } as any);
+
+    await expect(
+      agent.prompt({
+        sessionId,
+        prompt: [{ type: "text", text: "/regenerate-title" }],
+      } as any),
+    ).rejects.toThrow("Model overloaded");
+  });
+
+  test("handles /regenerate-title with extra whitespace", async () => {
+    process.env.PI_ACP_SMALL_MODEL = "test/tiny-model";
+    const connection = createMockConnection();
+    const mockSession = createMockSession();
+    mockSession.subscribe = vi.fn(() => () => {});
+    mockSession.prompt = vi.fn();
+    mockSession.setSessionName = vi.fn();
+
+    mockSession.state.messages = [{ role: "user", content: "How do I sort an array?" }];
+
+    mockSession.modelRegistry = {
+      find: vi.fn(() => ({ id: "tiny-model", provider: "test" })),
+      hasConfiguredAuth: vi.fn(() => true),
+      getApiKeyAndHeaders: vi.fn(() => Promise.resolve({ ok: true, apiKey: "key" })),
+    };
+
+    vi.mocked(completeSimple).mockResolvedValue({
+      content: [{ type: "text", text: "Array Sorting" }],
+    } as any);
+
+    const createRuntime = vi.fn(async () => ({
+      session: mockSession,
+      dispose: vi.fn(),
+    }));
+
+    const agent = createTestAgent(connection, createRuntime);
+
+    await agent.initialize({
+      protocolVersion: 1,
+      clientCapabilities: {},
+    });
+
+    const { sessionId } = await agent.newSession({ cwd: "/tmp/project" } as any);
+
+    const response = await agent.prompt({
+      sessionId,
+      prompt: [{ type: "text", text: "  /regenerate-title  " }],
+    } as any);
+
+    expect(response.stopReason).toBe("end_turn");
+    expect(mockSession.prompt).not.toHaveBeenCalled();
+    expect(mockSession.setSessionName).toHaveBeenCalledWith("Array Sorting");
   });
 });

@@ -91,6 +91,10 @@ describe("ACP slash commands", () => {
               name: "skill:brave-search",
               description: "Web search via Brave API",
             },
+            {
+              name: "regenerate-title",
+              description: "Regenerate session title based on all user messages",
+            },
           ],
         },
       });

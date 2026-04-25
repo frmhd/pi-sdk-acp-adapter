@@ -113,6 +113,11 @@ export async function refreshAvailableCommands(
   }
 
   const availableCommands = buildAcpAvailableCommands(getSlashCommands());
+  availableCommands.push({
+    name: "regenerate-title",
+    description: "Regenerate session title based on all user messages",
+  });
+
   if (!force && areAvailableCommandsEqual(sessionState.availableCommands, availableCommands)) {
     return;
   }

@@ -11,7 +11,12 @@ import {
   mergeCapturedRawOutput,
   releaseToolCallResources,
 } from "./toolCallState.js";
-import { generateSessionTitle, getSmallModelSpec } from "./titleGeneration.js";
+import { extractUserText } from "../session/sessionMetadata.js";
+import {
+  generateSessionTitle,
+  generateSessionTitleFromMessages,
+  getSmallModelSpec,
+} from "./titleGeneration.js";
 
 export async function executePrompt(options: {
   connection: AgentSideConnection;
@@ -44,6 +49,39 @@ export async function executePrompt(options: {
     sessionId: options.request.sessionId,
     clientCapabilities: options.clientCapabilities,
   });
+
+  const trimmedText = userText.trim();
+  if (trimmedText === "/regenerate-title") {
+    // Skip if no small model is configured
+    if (!getSmallModelSpec()) {
+      return { stopReason: "end_turn" };
+    }
+
+    // Collect all user messages (excluding assistant responses, tool calls, etc.)
+    const userMessages = session.state.messages
+      .filter(
+        (message): message is import("@mariozechner/pi-ai").UserMessage => message.role === "user",
+      )
+      .map((message) => extractUserText(message.content))
+      .filter((text): text is string => !!text);
+
+    if (userMessages.length === 0) {
+      return { stopReason: "end_turn" };
+    }
+
+    const title = await generateSessionTitleFromMessages(userMessages, session.modelRegistry);
+    if (title) {
+      session.setSessionName(title);
+      await options.refreshSessionMetadata(options.sessionState, true).catch((error) => {
+        console.warn(
+          `Failed to refresh session metadata after title regeneration for ${options.request.sessionId}:`,
+          error,
+        );
+      });
+    }
+
+    return { stopReason: "end_turn" };
+  }
 
   let sessionUpdateQueue: Promise<void> = Promise.resolve();
   const enqueueSessionUpdate = (work: () => Promise<void>) => {
@@ -195,6 +233,9 @@ export async function executePrompt(options: {
 
     if (shouldGenerateTitle) {
       void (async () => {
+        // Title generation is a best-effort side effect of the first prompt.
+        // Swallow failures here so that a model/auth error does not disrupt
+        // the user's primary prompt workflow.
         try {
           const title = await generateSessionTitle(userText, session.modelRegistry);
           if (title && options.sessionState.session) {

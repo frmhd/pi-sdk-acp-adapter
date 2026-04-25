@@ -25,7 +25,7 @@ export function normalizeSessionTitle(title: string | undefined): string | null 
   return `${normalized.slice(0, SESSION_TITLE_MAX_LENGTH - 1).trimEnd()}…`;
 }
 
-function extractUserText(content: UserMessage["content"]): string | undefined {
+export function extractUserText(content: UserMessage["content"]): string | undefined {
   if (typeof content === "string") {
     return content;
   }
