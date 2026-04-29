@@ -1,9 +1,11 @@
 import type { AgentSideConnection, PromptRequest, PromptResponse } from "@agentclientprotocol/sdk";
 import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
+import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
 
 import type { AcpClientCapabilitiesSnapshot, AcpSessionState, AcpToolCallState } from "../types.js";
 import { mapAgentEvent, mapStopReason } from "../AcpEventMapper.js";
 import { resolvePromptPathsInText } from "../resolvePromptPaths.js";
+
 import { extractContentFromBlocks } from "./promptContent.js";
 import {
   extractFirstChangedLine,
@@ -17,6 +19,34 @@ import {
   generateSessionTitleFromMessages,
   getSmallModelSpec,
 } from "./titleGeneration.js";
+
+function isAbortError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const msg = error.message.toLowerCase();
+  return msg.includes("abort") || msg.includes("cancelled") || error.name === "AbortError";
+}
+
+function enqueueErrorChunk(
+  enqueue: (work: () => Promise<void>) => void,
+  connection: AgentSideConnection,
+  sessionId: string,
+  text: string,
+  label: string,
+): void {
+  enqueue(async () => {
+    try {
+      await connection.sessionUpdate({
+        sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text },
+        },
+      });
+    } catch (sendErr) {
+      console.error(`Failed to send ${label} for session ${sessionId}:`, sendErr);
+    }
+  });
+}
 
 export async function executePrompt(options: {
   connection: AgentSideConnection;
@@ -59,9 +89,7 @@ export async function executePrompt(options: {
 
     // Collect all user messages (excluding assistant responses, tool calls, etc.)
     const userMessages = session.state.messages
-      .filter(
-        (message): message is import("@mariozechner/pi-ai").UserMessage => message.role === "user",
-      )
+      .filter((message): message is UserMessage => message.role === "user")
       .map((message) => extractUserText(message.content))
       .filter((text): text is string => !!text);
 
@@ -259,16 +287,44 @@ export async function executePrompt(options: {
     let stopReason: import("@agentclientprotocol/sdk").StopReason = "end_turn";
 
     if (lastMessage && lastMessage.role === "assistant") {
-      const assistantMsg = lastMessage as { stopReason?: string };
+      const assistantMsg = lastMessage as AssistantMessage;
       stopReason = mapStopReason(assistantMsg.stopReason);
+
+      // Stream ended with an error (e.g., API failure mid-generation). Inject the
+      // error text as a message chunk so the user sees what happened in chat.
+      if (assistantMsg.stopReason === "error" && assistantMsg.errorMessage) {
+        enqueueErrorChunk(
+          enqueueSessionUpdate,
+          options.connection,
+          options.request.sessionId,
+          assistantMsg.errorMessage,
+          "stream-error message",
+        );
+      }
     }
 
     return {
       stopReason,
     };
   } catch (error) {
+    if (isAbortError(error)) {
+      return { stopReason: "cancelled" };
+    }
+
+    const errorText = error instanceof Error ? error.message : String(error);
     console.error(`Prompt error for session ${options.request.sessionId}:`, error);
-    throw error;
+
+    // Send the error as an assistant message chunk so the user sees it in the
+    // ACP client chat history instead of getting a silent JSON-RPC failure.
+    enqueueErrorChunk(
+      enqueueSessionUpdate,
+      options.connection,
+      options.request.sessionId,
+      `Error: ${errorText}`,
+      "error message",
+    );
+
+    return { stopReason: "end_turn" };
   } finally {
     unsubscribe();
     await sessionUpdateQueue;

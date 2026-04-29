@@ -6,6 +6,143 @@ import {
   createTestAgent,
 } from "../helpers/testDoubles.ts";
 
+describe("AcpAgent prompt error handling", () => {
+  test("sends API error as agent_message_chunk when session.prompt() throws", async () => {
+    const connection = createMockConnection();
+    const mockSession = createMockSession();
+
+    mockSession.prompt = vi.fn(async () => {
+      throw new Error("529 overloaded_error: Overloaded");
+    });
+
+    const createRuntime = vi.fn(async () => ({
+      session: mockSession,
+      dispose: vi.fn(),
+    }));
+
+    const agent = createTestAgent(connection, createRuntime);
+
+    await agent.initialize({
+      protocolVersion: 1,
+      clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
+    });
+
+    const { sessionId } = await agent.newSession({ cwd: "/tmp/project" } as any);
+
+    const response = await agent.prompt({
+      sessionId,
+      prompt: [{ type: "text", text: "Hello" }],
+    } as any);
+
+    expect(response.stopReason).toBe("end_turn");
+
+    const updates = connection.sessionUpdate.mock.calls.map(
+      ([notification]: [any]) => notification.update,
+    );
+    const errorChunk = updates.find(
+      (update: any) =>
+        update.sessionUpdate === "agent_message_chunk" &&
+        update.content?.type === "text" &&
+        update.content.text.includes("529 overloaded_error"),
+    );
+    expect(errorChunk).toBeDefined();
+  });
+
+  test("returns cancelled stop reason for abort errors without sending an error chunk", async () => {
+    const connection = createMockConnection();
+    const mockSession = createMockSession();
+
+    mockSession.prompt = vi.fn(async () => {
+      const err = new Error("Request was aborted");
+      err.name = "AbortError";
+      throw err;
+    });
+
+    const createRuntime = vi.fn(async () => ({
+      session: mockSession,
+      dispose: vi.fn(),
+    }));
+
+    const agent = createTestAgent(connection, createRuntime);
+
+    await agent.initialize({
+      protocolVersion: 1,
+      clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
+    });
+
+    const { sessionId } = await agent.newSession({ cwd: "/tmp/project" } as any);
+
+    const response = await agent.prompt({
+      sessionId,
+      prompt: [{ type: "text", text: "Hello" }],
+    } as any);
+
+    expect(response.stopReason).toBe("cancelled");
+
+    const updates = connection.sessionUpdate.mock.calls.map(
+      ([notification]: [any]) => notification.update,
+    );
+    const errorChunk = updates.find(
+      (update: any) =>
+        update.sessionUpdate === "agent_message_chunk" &&
+        update.content?.type === "text" &&
+        update.content.text.includes("Error:"),
+    );
+    expect(errorChunk).toBeUndefined();
+  });
+
+  test("sends stream error as agent_message_chunk when last message has stopReason error", async () => {
+    const connection = createMockConnection();
+    const mockSession = createMockSession();
+
+    mockSession.prompt = vi.fn(async () => {
+      mockSession.state.messages.push({
+        role: "assistant",
+        content: [{ type: "text", text: "Partial response..." }],
+        stopReason: "error",
+      });
+    });
+
+    mockSession.agent = {
+      state: {
+        errorMessage: "Context window exceeded",
+      },
+    };
+
+    const createRuntime = vi.fn(async () => ({
+      session: mockSession,
+      dispose: vi.fn(),
+    }));
+
+    const agent = createTestAgent(connection, createRuntime);
+
+    await agent.initialize({
+      protocolVersion: 1,
+      clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
+    });
+
+    const { sessionId } = await agent.newSession({ cwd: "/tmp/project" } as any);
+
+    const response = await agent.prompt({
+      sessionId,
+      prompt: [{ type: "text", text: "Hello" }],
+    } as any);
+
+    expect(response.stopReason).toBe("end_turn");
+
+    const updates = connection.sessionUpdate.mock.calls.map(
+      ([notification]: [any]) => notification.update,
+    );
+    const errorChunk = updates.find(
+      (update: any) =>
+        update.sessionUpdate === "agent_message_chunk" &&
+        update.content?.type === "text" &&
+        update.content.text === "Context window exceeded",
+    );
+    expect(errorChunk).toBeDefined();
+  });
+});
+
 describe("AcpAgent prompt tool state tracking", () => {
   test("releases terminal-backed bash tool calls after the final ACP update", async () => {
     const connection = createMockConnection();
