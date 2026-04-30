@@ -1,10 +1,12 @@
 catalog:
   vite: npm:@voidzero-dev/vite-plus-core@latest
-  vitest: npm:@voidzero-dev/vite-plus-test@latest
   vite-plus: latest
+  vitest: npm:@voidzero-dev/vite-plus-test@latest
 overrides:
   vite: "catalog:"
   vitest: "catalog:"
+patchedDependencies:
+  "@mariozechner/pi-ai@0.70.6": patches/@mariozechner__pi-ai@0.70.6.patch
 peerDependencyRules:
   allowAny:
     - vite

@@ -100,14 +100,9 @@ describe("AcpAgent prompt error handling", () => {
         role: "assistant",
         content: [{ type: "text", text: "Partial response..." }],
         stopReason: "error",
+        errorMessage: "Context window exceeded",
       });
     });
-
-    mockSession.agent = {
-      state: {
-        errorMessage: "Context window exceeded",
-      },
-    };
 
     const createRuntime = vi.fn(async () => ({
       session: mockSession,

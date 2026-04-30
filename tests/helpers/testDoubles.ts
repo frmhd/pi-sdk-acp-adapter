@@ -17,6 +17,10 @@ export function createMockSession() {
       messages: [],
       model: undefined,
     },
+    modelRegistry: {
+      find: vi.fn(() => undefined),
+      hasConfiguredAuth: vi.fn(() => false),
+    },
     thinkingLevel: "medium",
     dispose: vi.fn(),
     subscribe: vi.fn(() => () => {}),
