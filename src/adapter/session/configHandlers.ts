@@ -15,6 +15,7 @@ import {
   getCurrentConfigOptions,
   getModelOptionValue,
 } from "./configOptions.js";
+import { getModelThinkingPreference, setModelThinkingPreference } from "./modelPreferences.js";
 
 export interface SetConfigResult {
   applied: boolean;
@@ -44,6 +45,16 @@ async function applyModelConfigChange(
   try {
     await session.session.setModel(model);
     session.currentModelId = getModelOptionValue(model);
+
+    // Apply saved per-model thinking level preference, if any.
+    const savedLevel = await getModelThinkingPreference(session.currentModelId);
+    if (savedLevel) {
+      // Defensively await in case the underlying implementation becomes async.
+      // eslint-disable-next-line @typescript-eslint/await-thenable
+      await session.session.setThinkingLevel(savedLevel);
+      session.currentThinkingLevel = savedLevel;
+    }
+
     return { applied: true };
   } catch (err) {
     console.error(`Failed to set model ${value}:`, err);
@@ -54,7 +65,10 @@ async function applyModelConfigChange(
   }
 }
 
-function applyThinkingLevelConfigChange(value: unknown, session: AcpSessionState): SetConfigResult {
+async function applyThinkingLevelConfigChange(
+  value: unknown,
+  session: AcpSessionState,
+): Promise<SetConfigResult> {
   if (typeof value !== "string" || !value) {
     return { applied: false, error: `Invalid thinking level: ${String(value)}` };
   }
@@ -68,8 +82,16 @@ function applyThinkingLevelConfigChange(value: unknown, session: AcpSessionState
     return { applied: false, error: "Session not initialized" };
   }
 
-  session.session.setThinkingLevel(level);
+  // Defensively await in case the underlying implementation becomes async.
+  // eslint-disable-next-line @typescript-eslint/await-thenable
+  await session.session.setThinkingLevel(level);
   session.currentThinkingLevel = level;
+
+  // Persist the preference so it's restored on future sessions with this model.
+  if (session.currentModelId) {
+    await setModelThinkingPreference(session.currentModelId, level);
+  }
+
   return { applied: true };
 }
 

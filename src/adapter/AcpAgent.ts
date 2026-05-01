@@ -51,6 +51,7 @@ import {
   getOrCreateToolCallState,
   releasePendingToolCallResources,
 } from "./agent/toolCallState.js";
+import { getModelThinkingPreference } from "./session/modelPreferences.js";
 import type { CreateAcpAgentRuntimeOptions } from "../runtime/AcpAgentRuntime.js";
 import {
   buildTerminalAuthMethods,
@@ -139,6 +140,7 @@ export class AcpAgent implements Agent {
       cwd: params.cwd,
       additionalDirectories: params.additionalDirectories || [],
       sessionManager,
+      isNewSession: true,
     });
 
     this.scheduleInitialSessionUpdates(sessionState);
@@ -351,6 +353,7 @@ export class AcpAgent implements Agent {
     cwd: string;
     additionalDirectories: string[];
     sessionManager: SessionManager;
+    isNewSession?: boolean;
   }): Promise<AcpSessionState> {
     const sessionId = options.sessionManager.getSessionId();
     await this.closePiSession(sessionId);
@@ -404,6 +407,20 @@ export class AcpAgent implements Agent {
         ? getModelOptionValue(session.state.model)
         : undefined;
       sessionState.currentThinkingLevel = session.thinkingLevel;
+
+      // For new sessions, override the default thinking level with a saved per-model
+      // preference, if any. For loaded/resumed sessions, preserve the level that was
+      // persisted with the session.
+      if (sessionState.currentModelId && options.isNewSession) {
+        const savedLevel = await getModelThinkingPreference(sessionState.currentModelId);
+        if (savedLevel) {
+          // Defensively await in case the underlying implementation becomes async.
+          // eslint-disable-next-line @typescript-eslint/await-thenable
+          await session.setThinkingLevel(savedLevel);
+          sessionState.currentThinkingLevel = savedLevel;
+        }
+      }
+
       this.sessions.set(sessionId, sessionState);
       return sessionState;
     } catch (error) {
