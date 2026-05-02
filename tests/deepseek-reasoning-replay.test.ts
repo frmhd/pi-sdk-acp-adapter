@@ -6,6 +6,7 @@ const deepseekModel = {
   provider: "deepseek",
   id: "deepseek-v4-pro",
   reasoning: true,
+  thinkingLevelMap: { high: "high", xhigh: "max" },
   input: ["text"],
 } as any;
 
@@ -13,7 +14,6 @@ const deepseekCompat = {
   supportsStore: false,
   supportsDeveloperRole: false,
   supportsReasoningEffort: true,
-  reasoningEffortMap: {},
   supportsUsageInStreaming: true,
   maxTokensField: "max_completion_tokens",
   requiresToolResultName: false,

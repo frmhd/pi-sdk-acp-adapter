@@ -12,6 +12,7 @@ import { USAGE_CONFIG_OPTION_ID } from "./configFormatting.js";
 import {
   ALL_THINKING_LEVELS,
   findModelById,
+  getAvailableThinkingLevels,
   getCurrentConfigOptions,
   getModelOptionValue,
 } from "./configOptions.js";
@@ -46,13 +47,24 @@ async function applyModelConfigChange(
     await session.session.setModel(model);
     session.currentModelId = getModelOptionValue(model);
 
-    // Apply saved per-model thinking level preference, if any.
+    const availableThinkingLevels = getAvailableThinkingLevels(model);
+
+    // Apply saved per-model thinking level preference, if the selected model supports it.
+    // Otherwise clamp the active session level to the model's first supported level so
+    // the returned config option and the underlying Pi session stay in sync.
     const savedLevel = await getModelThinkingPreference(session.currentModelId);
-    if (savedLevel) {
+    const nextThinkingLevel =
+      savedLevel && availableThinkingLevels.includes(savedLevel)
+        ? savedLevel
+        : availableThinkingLevels.includes(session.currentThinkingLevel || "medium")
+          ? undefined
+          : availableThinkingLevels[0];
+
+    if (nextThinkingLevel) {
       // Defensively await in case the underlying implementation becomes async.
       // eslint-disable-next-line @typescript-eslint/await-thenable
-      await session.session.setThinkingLevel(savedLevel);
-      session.currentThinkingLevel = savedLevel;
+      await session.session.setThinkingLevel(nextThinkingLevel);
+      session.currentThinkingLevel = nextThinkingLevel;
     }
 
     return { applied: true };
@@ -68,6 +80,7 @@ async function applyModelConfigChange(
 async function applyThinkingLevelConfigChange(
   value: unknown,
   session: AcpSessionState,
+  availableModels: Model<Api>[],
 ): Promise<SetConfigResult> {
   if (typeof value !== "string" || !value) {
     return { applied: false, error: `Invalid thinking level: ${String(value)}` };
@@ -80,6 +93,13 @@ async function applyThinkingLevelConfigChange(
 
   if (!session.session) {
     return { applied: false, error: "Session not initialized" };
+  }
+
+  const currentModel = session.currentModelId
+    ? findModelById(session.currentModelId, availableModels, session.session.state?.model?.provider)
+    : undefined;
+  if (!getAvailableThinkingLevels(currentModel).includes(level)) {
+    return { applied: false, error: `Thinking level not supported by current model: ${value}` };
   }
 
   // Defensively await in case the underlying implementation becomes async.
@@ -108,7 +128,7 @@ export async function handleSetSessionConfigOption(
     case "model":
       return applyModelConfigChange(params.value, session, availableModels);
     case "thinking_level":
-      return applyThinkingLevelConfigChange(params.value, session);
+      return applyThinkingLevelConfigChange(params.value, session, availableModels);
     case USAGE_CONFIG_OPTION_ID:
       return { applied: true };
     default:

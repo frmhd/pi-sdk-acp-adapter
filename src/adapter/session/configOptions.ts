@@ -75,6 +75,14 @@ function thinkingLevelToOption(level: ThinkingLevel): SessionConfigSelectOption 
   };
 }
 
+export function getAvailableThinkingLevels(model: Model<Api> | undefined): ThinkingLevel[] {
+  if (!model?.reasoning) {
+    return ["off"];
+  }
+
+  return ALL_THINKING_LEVELS.filter((level) => model.thinkingLevelMap?.[level] !== null);
+}
+
 export function createModelConfigOption(
   availableModels: Model<Api>[],
   currentModelId: string | undefined,
@@ -148,9 +156,10 @@ export function createThinkingConfigOption(
   currentLevel: ThinkingLevel,
 ): SessionConfigOption {
   const options: SessionConfigSelectOptions = availableLevels.map(thinkingLevelToOption);
+  const currentValue = availableLevels.includes(currentLevel) ? currentLevel : availableLevels[0]!;
 
   const selectPayload: SessionConfigSelect = {
-    currentValue: currentLevel,
+    currentValue,
     options,
   };
 
@@ -208,8 +217,13 @@ export function getCurrentConfigOptions(
     ),
   );
 
+  const currentModel = session.currentModelId
+    ? findModelById(session.currentModelId, availableModels, session.session?.state.model?.provider)
+    : undefined;
   const currentThinkingLevel = session.currentThinkingLevel || "medium";
-  options.push(createThinkingConfigOption(ALL_THINKING_LEVELS, currentThinkingLevel));
+  options.push(
+    createThinkingConfigOption(getAvailableThinkingLevels(currentModel), currentThinkingLevel),
+  );
 
   return options;
 }

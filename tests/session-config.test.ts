@@ -113,6 +113,112 @@ describe("ACP session config model values", () => {
     expect(usageOption.description).toContain("$0.015");
   });
 
+  test("filters thinking levels using model thinkingLevelMap", () => {
+    const thinkingModel = {
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      provider: "deepseek",
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: null,
+        medium: null,
+        high: "high",
+        xhigh: "max",
+      },
+    } as any;
+
+    const options = getCurrentConfigOptions(
+      {
+        currentModelId: getModelOptionValue(thinkingModel),
+        currentThinkingLevel: "medium",
+        session: { state: { model: { provider: "deepseek" } } },
+      } as any,
+      [thinkingModel],
+    );
+
+    const thinkingOption = options.find((option) => option.id === "thinking_level") as any;
+    expect(thinkingOption.currentValue).toBe("high");
+    expect(thinkingOption.options.map((option: any) => option.value)).toEqual(["high", "xhigh"]);
+  });
+
+  test("setSessionConfigOption rejects thinking levels unsupported by current model", async () => {
+    const thinkingModel = {
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      provider: "deepseek",
+      reasoning: true,
+      thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", xhigh: "max" },
+    } as any;
+    const session = {
+      currentModelId: getModelOptionValue(thinkingModel),
+      session: {
+        state: { model: { provider: "deepseek" } },
+        setThinkingLevel: vi.fn(),
+      },
+    } as any;
+
+    const result = await handleSetSessionConfigOption(
+      { sessionId: "session-1", configId: "thinking_level", value: "medium" } as any,
+      session,
+      [thinkingModel],
+    );
+
+    expect(result).toEqual({
+      applied: false,
+      error: "Thinking level not supported by current model: medium",
+    });
+    expect(session.session.setThinkingLevel).not.toHaveBeenCalled();
+  });
+
+  test("setSessionConfigOption clamps thinking level after changing to a model with fewer levels", async () => {
+    const currentModel = {
+      id: "gpt-5",
+      name: "GPT-5",
+      provider: "openai",
+      reasoning: true,
+    } as any;
+    const nextModel = {
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      provider: "deepseek",
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: null,
+        medium: null,
+        high: "high",
+        xhigh: "max",
+      },
+    } as any;
+    const session = {
+      currentModelId: getModelOptionValue(currentModel),
+      currentThinkingLevel: "medium",
+      session: {
+        state: { model: { provider: "openai" } },
+        setModel: vi.fn(async () => undefined),
+        setThinkingLevel: vi.fn(),
+      },
+    } as any;
+
+    const result = await handleSetSessionConfigOption(
+      {
+        sessionId: "session-1",
+        configId: "model",
+        value: getModelOptionValue(nextModel),
+      } as any,
+      session,
+      [currentModel, nextModel],
+    );
+
+    expect(result).toEqual({ applied: true });
+    expect(session.session.setModel).toHaveBeenCalledWith(nextModel);
+    expect(session.session.setThinkingLevel).toHaveBeenCalledWith("high");
+    expect(session.currentThinkingLevel).toBe("high");
+  });
+
   test("setSessionConfigOption canonicalizes the stored model value after selection", async () => {
     const session = {
       currentModelId: undefined,

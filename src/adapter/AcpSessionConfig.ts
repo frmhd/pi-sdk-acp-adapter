@@ -8,6 +8,7 @@ export {
   createThinkingConfigOption,
   createUsageConfigOption,
   getCurrentConfigOptions,
+  getAvailableThinkingLevels,
   findModelById,
 } from "./session/configOptions.js";
 
