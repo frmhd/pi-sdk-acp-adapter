@@ -13,8 +13,8 @@ let cachedPreferences: ModelPreferences | null = null;
 let writeLock: Promise<void> = Promise.resolve();
 let writeDisabled = false;
 
-function isValidThinkingLevel(value: string): value is ThinkingLevel {
-  return ALL_THINKING_LEVELS.includes(value as ThinkingLevel);
+export function isValidThinkingLevel(value: string | undefined): value is ThinkingLevel {
+  return !!value && ALL_THINKING_LEVELS.includes(value as ThinkingLevel);
 }
 
 function isEnoent(error: unknown): boolean {

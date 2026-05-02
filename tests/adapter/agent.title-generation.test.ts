@@ -6,10 +6,14 @@ import {
   createTestAgent,
 } from "../helpers/testDoubles.ts";
 
-vi.mock("@mariozechner/pi-ai", () => ({
-  completeSimple: vi.fn(),
-  getEnvApiKey: vi.fn(),
-}));
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import("@mariozechner/pi-ai");
+  return {
+    ...actual,
+    completeSimple: vi.fn(),
+    getEnvApiKey: vi.fn(),
+  };
+});
 
 import { completeSimple, getEnvApiKey } from "@mariozechner/pi-ai";
 import {

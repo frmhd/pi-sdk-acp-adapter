@@ -1,6 +1,8 @@
 import {
   createReadToolDefinition,
+  type CreateAgentSessionOptions,
   type EditOperations,
+  type ModelRegistry,
   type ReadOperations,
   type WriteOperations,
 } from "@mariozechner/pi-coding-agent";
@@ -23,16 +25,21 @@ import {
 import { wrapBashForAcp } from "./wrapBashTool.js";
 import { wrapEditForAcp } from "./wrapEditTool.js";
 import { wrapWriteForAcp } from "./wrapWriteTool.js";
+import { createSubagentTool } from "./wrapSubagentTool.js";
 
 export interface BuildAcpSessionToolsOptions {
   cwd: string;
   additionalDirectories: string[];
+  agentDir?: string;
+  modelRegistry: ModelRegistry;
   acpClient: AcpClientInterface;
   clientCapabilities: AcpClientCapabilitiesSnapshot;
   onToolCallStateCaptured?: (toolCallId: string, update: Partial<AcpToolCallState>) => void;
 }
 
-export function buildAcpSessionTools(options: BuildAcpSessionToolsOptions): AcpSessionTools {
+function buildCoreAcpSessionTools(
+  options: BuildAcpSessionToolsOptions,
+): Pick<AcpSessionTools, "readTool" | "writeTool" | "editTool" | "bashTool"> {
   const authorizedRoots = getAuthorizedRoots(options.cwd, options.additionalDirectories);
   const acpReadRoots = getAuthorizedRoots(options.cwd);
   const tracking = createMutationToolTracking();
@@ -108,5 +115,37 @@ export function buildAcpSessionTools(options: BuildAcpSessionToolsOptions): AcpS
     writeTool,
     editTool,
     bashTool,
+  };
+}
+
+export function buildAcpSessionTools(options: BuildAcpSessionToolsOptions): AcpSessionTools {
+  const coreTools = buildCoreAcpSessionTools(options);
+  const createChildCustomTools = (
+    cwd: string,
+  ): NonNullable<CreateAgentSessionOptions["customTools"]> => {
+    const childCoreTools = buildCoreAcpSessionTools({
+      ...options,
+      cwd,
+      onToolCallStateCaptured: undefined,
+    });
+
+    return [
+      childCoreTools.readTool,
+      childCoreTools.writeTool,
+      childCoreTools.editTool,
+      childCoreTools.bashTool,
+    ] as unknown as NonNullable<CreateAgentSessionOptions["customTools"]>;
+  };
+
+  const subagentTool = createSubagentTool({
+    cwd: options.cwd,
+    agentDir: options.agentDir,
+    modelRegistry: options.modelRegistry,
+    createChildCustomTools,
+  });
+
+  return {
+    ...coreTools,
+    subagentTool,
   };
 }
