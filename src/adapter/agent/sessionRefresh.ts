@@ -151,5 +151,5 @@ export function scheduleInitialSessionUpdates(options: {
         error,
       );
     });
-  }, 0);
+  }, 50);
 }
