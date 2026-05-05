@@ -6,7 +6,7 @@ overrides:
   vite: "catalog:"
   vitest: "catalog:"
 patchedDependencies:
-  "@mariozechner/pi-ai@0.72.1": patches/@mariozechner__pi-ai@0.72.1.patch
+  "@mariozechner/pi-ai@0.73.0": patches/@mariozechner__pi-ai@0.72.1.patch
 peerDependencyRules:
   allowAny:
     - vite
