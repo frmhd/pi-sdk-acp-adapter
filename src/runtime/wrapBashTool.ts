@@ -1,4 +1,4 @@
-import { createBashToolDefinition } from "@mariozechner/pi-coding-agent";
+import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
 
 import type { AcpToolCallState } from "../adapter/types.js";
 import {

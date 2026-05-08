@@ -2,14 +2,14 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Message } from "@mariozechner/pi-ai";
+import type { Message } from "@earendil-works/pi-ai";
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 
 const createAgentSessionMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
-  const actual = (await importOriginal()) as typeof import("@mariozechner/pi-coding-agent");
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import("@earendil-works/pi-coding-agent");
   return {
     ...actual,
     createAgentSession: createAgentSessionMock,

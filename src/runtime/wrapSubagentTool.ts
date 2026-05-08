@@ -1,11 +1,11 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import {
   StringEnum,
   Type,
   type Api,
   type AssistantMessage,
   type Message,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -16,7 +16,7 @@ import {
   type CreateAgentSessionOptions,
   type ExtensionContext,
   type ModelRegistry,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 import { findModelById } from "../adapter/AcpSessionConfig.js";
 import { markToolBackend, type AcpSessionTool } from "./toolTracking.js";

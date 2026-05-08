@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, test, vi } from "vite-plus/test";
 
 const createAgentSessionMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
-  const actual = (await importOriginal()) as typeof import("@mariozechner/pi-coding-agent");
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import("@earendil-works/pi-coding-agent");
   return {
     ...actual,
     createAgentSession: createAgentSessionMock,

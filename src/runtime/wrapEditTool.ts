@@ -1,4 +1,4 @@
-import { createEditToolDefinition, type EditOperations } from "@mariozechner/pi-coding-agent";
+import { createEditToolDefinition, type EditOperations } from "@earendil-works/pi-coding-agent";
 
 import type { AcpToolCallState } from "../adapter/types.js";
 import { resolveToolPath } from "../shared/paths.js";

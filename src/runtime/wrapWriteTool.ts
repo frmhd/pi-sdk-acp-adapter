@@ -2,7 +2,7 @@ import {
   createWriteToolDefinition,
   type ReadOperations,
   type WriteOperations,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 import type { AcpToolCallState } from "../adapter/types.js";
 import { resolveToolPath } from "../shared/paths.js";

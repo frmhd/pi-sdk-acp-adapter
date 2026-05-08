@@ -13,7 +13,7 @@ import {
   type EditOperations,
   type ReadOperations,
   type WriteOperations,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 import { assertPathAuthorized, type AcpPathAuthorizationOptions } from "./authorization.js";
 

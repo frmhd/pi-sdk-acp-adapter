@@ -3,8 +3,8 @@ import { join } from "node:path";
 
 import type { AuthMethod } from "@agentclientprotocol/sdk";
 
-import { AuthStorage, getAgentDir } from "@mariozechner/pi-coding-agent";
-import type { OAuthProviderInterface } from "@mariozechner/pi-ai";
+import { AuthStorage, getAgentDir } from "@earendil-works/pi-coding-agent";
+import type { OAuthProviderInterface } from "@earendil-works/pi-ai";
 
 export const ACP_TERMINAL_AUTH_FLAG = "--acp-terminal-auth";
 const ACP_TERMINAL_AUTH_METHOD_PREFIX = "terminal:";

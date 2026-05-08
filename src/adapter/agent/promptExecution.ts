@@ -1,6 +1,6 @@
 import type { AgentSideConnection, PromptRequest, PromptResponse } from "@agentclientprotocol/sdk";
-import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
-import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
 
 import type { AcpClientCapabilitiesSnapshot, AcpSessionState, AcpToolCallState } from "../types.js";
 import { mapAgentEvent, mapStopReason } from "../AcpEventMapper.js";

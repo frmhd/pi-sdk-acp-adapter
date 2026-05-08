@@ -28,11 +28,11 @@ import type {
   AgentSessionEvent,
   AgentSessionEventListener,
   SlashCommandInfo,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
-import type { ThinkingLevel, AgentEvent } from "@mariozechner/pi-agent-core";
+import type { ThinkingLevel, AgentEvent } from "@earendil-works/pi-agent-core";
 
-import type { Model, Provider, AssistantMessageEvent } from "@mariozechner/pi-ai";
+import type { Model, Provider, AssistantMessageEvent } from "@earendil-works/pi-ai";
 
 // =============================================================================
 // Session State

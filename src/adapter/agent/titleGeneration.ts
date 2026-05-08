@@ -1,5 +1,5 @@
-import { completeSimple, getEnvApiKey } from "@mariozechner/pi-ai";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { completeSimple, getEnvApiKey } from "@earendil-works/pi-ai";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 import { normalizeSessionTitle } from "../session/sessionMetadata.js";
 

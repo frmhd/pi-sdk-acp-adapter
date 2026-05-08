@@ -3,8 +3,8 @@ import type {
   AgentSession,
   SessionInfo as PiSessionInfo,
   SessionEntry,
-} from "@mariozechner/pi-coding-agent";
-import type { TextContent, UserMessage } from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-coding-agent";
+import type { TextContent, UserMessage } from "@earendil-works/pi-ai";
 
 const SESSION_TITLE_MAX_LENGTH = 80;
 

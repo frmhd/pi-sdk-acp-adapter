@@ -1,5 +1,5 @@
 import type { AgentSideConnection, ContentBlock } from "@agentclientprotocol/sdk";
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type {
   AssistantMessage,
   ImageContent,
@@ -7,7 +7,7 @@ import type {
   ThinkingContent,
   ToolCall as PiToolCall,
   ToolResultMessage,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 
 import { mapToolExecutionEnd, mapToolExecutionStart } from "../AcpEventMapper.js";
 import { resolveToolPath } from "../../shared/paths.js";

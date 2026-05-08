@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vite-plus/test";
-import { getModel } from "../node_modules/@mariozechner/pi-ai/dist/models.js";
-import { streamSimpleOpenAICompletions } from "../node_modules/@mariozechner/pi-ai/dist/providers/openai-completions.js";
+import { getModel } from "../node_modules/@earendil-works/pi-ai/dist/models.js";
+import { streamSimpleOpenAICompletions } from "../node_modules/@earendil-works/pi-ai/dist/providers/openai-completions.js";
 
 describe("OpenCode Go DeepSeek compat", () => {
   test("uses DeepSeek thinking controls and xhigh effort mapping", async () => {

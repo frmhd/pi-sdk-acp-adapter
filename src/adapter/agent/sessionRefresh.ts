@@ -1,5 +1,5 @@
 import type { AgentSideConnection, Implementation } from "@agentclientprotocol/sdk";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 import type { AcpSessionState } from "../types.js";
 import {

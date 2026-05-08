@@ -1,6 +1,6 @@
 import { mkdir as fsMkdir } from "node:fs/promises";
 
-import type { WriteOperations } from "@mariozechner/pi-coding-agent";
+import type { WriteOperations } from "@earendil-works/pi-coding-agent";
 
 import { normalizeAcpFsError } from "./acpFsErrors.js";
 import { assertPathAuthorized, type AcpPathAuthorizationOptions } from "./authorization.js";

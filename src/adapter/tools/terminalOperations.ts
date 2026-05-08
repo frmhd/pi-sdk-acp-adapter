@@ -1,5 +1,5 @@
 import type { EnvVariable, TerminalHandle } from "@agentclientprotocol/sdk";
-import { DEFAULT_MAX_BYTES, type BashOperations } from "@mariozechner/pi-coding-agent";
+import { DEFAULT_MAX_BYTES, type BashOperations } from "@earendil-works/pi-coding-agent";
 
 import type { AcpClientCapabilitiesSnapshot } from "../types.js";
 import { buildNonInteractiveShellEnv } from "./localOperations.js";

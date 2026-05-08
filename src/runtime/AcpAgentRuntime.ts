@@ -4,8 +4,8 @@ import type {
   CreateAgentSessionOptions,
   ModelRegistry,
   SessionManager,
-} from "@mariozechner/pi-coding-agent";
-import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
+} from "@earendil-works/pi-coding-agent";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 
 import type { AcpClientCapabilitiesSnapshot, AcpToolCallState } from "../adapter/types.js";
 import { AcpConnectionAdapter } from "./acpConnectionAdapter.js";
@@ -27,9 +27,9 @@ export interface CreateAcpAgentRuntimeOptions {
 export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOptions): Promise<{
   session: AgentSession;
   dispose: () => void;
-  getSlashCommands: () => import("@mariozechner/pi-coding-agent").SlashCommandInfo[];
+  getSlashCommands: () => import("@earendil-works/pi-coding-agent").SlashCommandInfo[];
 }> {
-  const { createAgentSession } = await import("@mariozechner/pi-coding-agent");
+  const { createAgentSession } = await import("@earendil-works/pi-coding-agent");
 
   const acpClient = new AcpConnectionAdapter(
     options.acpConnection,
@@ -80,7 +80,7 @@ export function createAcpAgentRuntimeFactory(
   ): Promise<{
     session: AgentSession;
     dispose: () => void;
-    getSlashCommands: () => import("@mariozechner/pi-coding-agent").SlashCommandInfo[];
+    getSlashCommands: () => import("@earendil-works/pi-coding-agent").SlashCommandInfo[];
   }> => {
     return createAcpAgentRuntime({
       ...options,

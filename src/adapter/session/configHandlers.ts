@@ -4,8 +4,8 @@ import type {
   SetSessionConfigOptionRequest,
   SetSessionConfigOptionResponse,
 } from "@agentclientprotocol/sdk";
-import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
 
 import type { AcpSessionState } from "../types.js";
 import { USAGE_CONFIG_OPTION_ID } from "./configFormatting.js";

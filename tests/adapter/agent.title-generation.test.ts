@@ -6,8 +6,8 @@ import {
   createTestAgent,
 } from "../helpers/testDoubles.ts";
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const actual = (await importOriginal()) as typeof import("@mariozechner/pi-ai");
+vi.mock("@earendil-works/pi-ai", async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import("@earendil-works/pi-ai");
   return {
     ...actual,
     completeSimple: vi.fn(),
@@ -15,7 +15,7 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   };
 });
 
-import { completeSimple, getEnvApiKey } from "@mariozechner/pi-ai";
+import { completeSimple, getEnvApiKey } from "@earendil-works/pi-ai";
 import {
   generateSessionTitle,
   generateSessionTitleFromMessages,

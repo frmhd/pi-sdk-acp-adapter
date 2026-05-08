@@ -7,9 +7,9 @@ import type {
   ToolCallStatus,
   ToolCallUpdate,
 } from "@agentclientprotocol/sdk";
-import type { AgentEvent } from "@mariozechner/pi-agent-core";
-import type { AssistantMessageEvent } from "@mariozechner/pi-ai";
-import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
+import type { AgentEvent } from "@earendil-works/pi-agent-core";
+import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 import { createDiffContent, createToolCallContent, mapStopReason, mapToolKind } from "./types.js";
 import {

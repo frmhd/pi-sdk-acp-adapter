@@ -1,4 +1,4 @@
-import type { ReadOperations } from "@mariozechner/pi-coding-agent";
+import type { ReadOperations } from "@earendil-works/pi-coding-agent";
 
 import { normalizeAcpFsError } from "./acpFsErrors.js";
 import { assertPathAuthorized, type AcpPathAuthorizationOptions } from "./authorization.js";

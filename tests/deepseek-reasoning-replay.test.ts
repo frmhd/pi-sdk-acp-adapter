@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vite-plus/test";
-import { convertMessages } from "../node_modules/@mariozechner/pi-ai/dist/providers/openai-completions.js";
+import { convertMessages } from "../node_modules/@earendil-works/pi-ai/dist/providers/openai-completions.js";
 
 const deepseekModel = {
   api: "openai-completions",
@@ -90,6 +90,11 @@ describe("DeepSeek reasoning_content replay", () => {
         tool_calls: [
           expect.objectContaining({
             id: "call_1",
+            type: "function",
+            function: expect.objectContaining({
+              name: "read",
+              arguments: '{"path":"/tmp/x","offset":1,"limit":1}',
+            }),
           }),
         ],
       }),
@@ -120,6 +125,15 @@ describe("DeepSeek reasoning_content replay", () => {
         role: "assistant",
         content: "",
         reasoning_content: "I will call a tool.",
+        tool_calls: [
+          expect.objectContaining({
+            id: "call_1",
+            type: "function",
+            function: expect.objectContaining({
+              name: "read",
+            }),
+          }),
+        ],
       }),
     );
   });

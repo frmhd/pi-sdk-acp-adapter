@@ -1,5 +1,5 @@
 import type { AvailableCommand } from "@agentclientprotocol/sdk";
-import type { SlashCommandInfo } from "@mariozechner/pi-coding-agent";
+import type { SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 
 function fallbackCommandDescription(command: SlashCommandInfo): string {
   return `Run /${command.name}`;

@@ -1,5 +1,5 @@
 import type { ContentBlock } from "@agentclientprotocol/sdk";
-import type { ImageContent as PiImageContent } from "@mariozechner/pi-ai";
+import type { ImageContent as PiImageContent } from "@earendil-works/pi-ai";
 
 export interface ExtractedContent {
   text: string;
