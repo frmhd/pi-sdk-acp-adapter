@@ -1,12 +1,9 @@
-export { USAGE_CONFIG_OPTION_ID } from "./session/configFormatting.js";
-
 export {
   ALL_THINKING_LEVELS,
   getAvailableModels,
   getModelOptionValue,
   createModelConfigOption,
   createThinkingConfigOption,
-  createUsageConfigOption,
   getCurrentConfigOptions,
   getAvailableThinkingLevels,
   findModelById,

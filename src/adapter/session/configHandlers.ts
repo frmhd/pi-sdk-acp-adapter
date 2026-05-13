@@ -8,7 +8,6 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 
 import type { AcpSessionState } from "../types.js";
-import { USAGE_CONFIG_OPTION_ID } from "./configFormatting.js";
 import {
   ALL_THINKING_LEVELS,
   findModelById,
@@ -129,8 +128,6 @@ export async function handleSetSessionConfigOption(
       return applyModelConfigChange(params.value, session, availableModels);
     case "thinking_level":
       return applyThinkingLevelConfigChange(params.value, session, availableModels);
-    case USAGE_CONFIG_OPTION_ID:
-      return { applied: true };
     default:
       return { applied: false, error: `Unknown config option: ${params.configId}` };
   }

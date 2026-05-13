@@ -11,13 +11,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 
 import type { AcpSessionState } from "../types.js";
-import {
-  buildUsageConfigDescription,
-  buildUsageConfigLabel,
-  USAGE_CONFIG_OPTION_ID,
-  USAGE_CONFIG_OPTION_VALUE,
-} from "./configFormatting.js";
-import { clientSupportsGroupedOptions, clientSupportsUsageConfigOption } from "./clientSupport.js";
+import { clientSupportsGroupedOptions } from "./clientSupport.js";
 
 type ModelOptionIdentity = Pick<Model<Api>, "id" | "provider">;
 
@@ -173,40 +167,12 @@ export function createThinkingConfigOption(
   } as SessionConfigOption;
 }
 
-export function createUsageConfigOption(session: AcpSessionState): SessionConfigOption {
-  const label = buildUsageConfigLabel(session);
-  const description = buildUsageConfigDescription(session);
-
-  const selectPayload: SessionConfigSelect = {
-    currentValue: USAGE_CONFIG_OPTION_VALUE,
-    options: [
-      {
-        value: USAGE_CONFIG_OPTION_VALUE,
-        name: label,
-        description,
-      },
-    ],
-  };
-
-  return {
-    type: "select",
-    id: USAGE_CONFIG_OPTION_ID,
-    name: "Usage",
-    description,
-    ...selectPayload,
-  } as SessionConfigOption;
-}
-
 export function getCurrentConfigOptions(
   session: AcpSessionState,
   availableModels: Model<Api>[],
   clientInfo?: Implementation | null,
 ): SessionConfigOption[] {
   const options: SessionConfigOption[] = [];
-
-  if (clientSupportsUsageConfigOption(clientInfo)) {
-    options.push(createUsageConfigOption(session));
-  }
 
   options.push(
     createModelConfigOption(

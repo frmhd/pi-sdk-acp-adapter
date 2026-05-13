@@ -239,7 +239,6 @@ export class AcpAgent implements Agent {
       sessionState,
       clientCapabilities: this.clientCapabilities,
       refreshSessionUsage: (state, force) => this.refreshSessionUsage(state, force),
-      refreshConfigOptions: (state, force) => this.refreshConfigOptions(state, force),
       refreshSessionMetadata: (state, force) => this.refreshSessionMetadata(state, force),
       refreshAvailableCommands: (state, force) => this.refreshAvailableCommands(state, force),
     });

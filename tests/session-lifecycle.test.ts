@@ -262,15 +262,6 @@ describe("AcpAgent session lifecycle", () => {
       } as any);
       const { sessionId } = created;
 
-      expect(created.configOptions).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "_usage",
-            name: "Usage",
-          }),
-        ]),
-      );
-
       await vi.runAllTimersAsync();
       connection.sessionUpdate.mockClear();
 
@@ -286,26 +277,6 @@ describe("AcpAgent session lifecycle", () => {
             sessionUpdate: "usage_update",
             size: 200_000,
             used: 8192,
-          }),
-        }),
-      );
-
-      expect(connection.sessionUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionId,
-          update: expect.objectContaining({
-            sessionUpdate: "config_option_update",
-            configOptions: expect.arrayContaining([
-              expect.objectContaining({
-                id: "_usage",
-                options: [
-                  expect.objectContaining({
-                    value: "current",
-                    name: "8.2k/200k · 4.1%",
-                  }),
-                ],
-              }),
-            ]),
           }),
         }),
       );
@@ -496,20 +467,6 @@ describe("AcpAgent session lifecycle", () => {
           sessionUpdate: "usage_update",
           size: 200_000,
           used: 8192,
-        }),
-      }),
-    );
-    expect(connection.sessionUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId,
-        update: expect.objectContaining({
-          sessionUpdate: "config_option_update",
-          configOptions: expect.arrayContaining([
-            expect.objectContaining({
-              id: "_usage",
-              options: [expect.objectContaining({ name: "8.2k/200k · 4.1%" })],
-            }),
-          ]),
         }),
       }),
     );

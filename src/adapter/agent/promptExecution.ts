@@ -54,7 +54,6 @@ export async function executePrompt(options: {
   sessionState: AcpSessionState;
   clientCapabilities: AcpClientCapabilitiesSnapshot;
   refreshSessionUsage: (sessionState: AcpSessionState, force?: boolean) => Promise<void>;
-  refreshConfigOptions: (sessionState: AcpSessionState, force?: boolean) => Promise<void>;
   refreshSessionMetadata: (sessionState: AcpSessionState, force?: boolean) => Promise<void>;
   refreshAvailableCommands: (sessionState: AcpSessionState, force?: boolean) => Promise<void>;
 }): Promise<PromptResponse> {
@@ -233,12 +232,6 @@ export async function executePrompt(options: {
               error,
             );
           });
-          await options.refreshConfigOptions(options.sessionState).catch((error) => {
-            console.warn(
-              `Failed to refresh session config options for ${options.request.sessionId}:`,
-              error,
-            );
-          });
         }
       } catch (err) {
         console.error(`Failed to send session update for ${options.request.sessionId}:`, err);
@@ -330,12 +323,6 @@ export async function executePrompt(options: {
     await sessionUpdateQueue;
     await options.refreshSessionUsage(options.sessionState).catch((error) => {
       console.warn(`Failed to refresh session usage for ${options.request.sessionId}:`, error);
-    });
-    await options.refreshConfigOptions(options.sessionState).catch((error) => {
-      console.warn(
-        `Failed to refresh session config options for ${options.request.sessionId}:`,
-        error,
-      );
     });
     await options.refreshSessionMetadata(options.sessionState).catch((error) => {
       console.warn(`Failed to refresh session metadata for ${options.request.sessionId}:`, error);
