@@ -3,7 +3,7 @@ import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { SessionInfo as PiSessionInfo } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type SessionInfo as PiSessionInfo } from "@earendil-works/pi-coding-agent";
 
 function getDefaultAgentDir(): string {
   return join(homedir(), ".pi", "agent");
@@ -27,7 +27,6 @@ export async function listPersistedPiSessions(params: {
   agentDir?: string;
 }): Promise<PiSessionInfo[]> {
   if (params.cwd) {
-    const { SessionManager } = await import("@earendil-works/pi-coding-agent");
     return SessionManager.list(params.cwd, getAcpSessionDirectory(params.cwd, params.agentDir));
   }
 
@@ -36,8 +35,6 @@ export async function listPersistedPiSessions(params: {
   const dirs = entries
     .filter((entry) => entry.isDirectory())
     .map((entry) => join(root, entry.name));
-  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-
   const sessions = (
     await Promise.all(dirs.map((dir) => SessionManager.list(process.cwd(), dir).catch(() => [])))
   ).flat();

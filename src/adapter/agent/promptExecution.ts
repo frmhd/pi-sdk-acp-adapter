@@ -1,4 +1,9 @@
-import type { AgentSideConnection, PromptRequest, PromptResponse } from "@agentclientprotocol/sdk";
+import type {
+  AgentSideConnection,
+  PromptRequest,
+  PromptResponse,
+  StopReason,
+} from "@agentclientprotocol/sdk";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
 
@@ -277,7 +282,7 @@ export async function executePrompt(options: {
     await session.prompt(userText, images.length > 0 ? { images } : undefined);
 
     const lastMessage = session.state.messages[session.state.messages.length - 1];
-    let stopReason: import("@agentclientprotocol/sdk").StopReason = "end_turn";
+    let stopReason: StopReason = "end_turn";
 
     if (lastMessage && lastMessage.role === "assistant") {
       const assistantMsg = lastMessage as AssistantMessage;

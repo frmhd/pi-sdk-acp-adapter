@@ -22,7 +22,12 @@ import type {
   SetSessionConfigOptionResponse,
 } from "@agentclientprotocol/sdk";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { SessionManager, type ModelRegistry } from "@earendil-works/pi-coding-agent";
+import {
+  SessionManager,
+  type AgentSession,
+  type ModelRegistry,
+  type SlashCommandInfo,
+} from "@earendil-works/pi-coding-agent";
 
 import type { AcpClientCapabilitiesSnapshot, AcpSessionState } from "./types.js";
 import { captureClientCapabilities } from "./types.js";
@@ -75,18 +80,18 @@ export class AcpAgent implements Agent {
   private initialized = false;
   private clientCapabilities: AcpClientCapabilitiesSnapshot = captureClientCapabilities();
   private createRuntime: (options: CreateAcpAgentRuntimeOptions) => Promise<{
-    session: import("@earendil-works/pi-coding-agent").AgentSession;
+    session: AgentSession;
     dispose: () => void;
-    getSlashCommands?: () => import("@earendil-works/pi-coding-agent").SlashCommandInfo[];
+    getSlashCommands?: () => SlashCommandInfo[];
   }>;
 
   constructor(
     connection: AgentSideConnection,
     config: AcpAdapterConfig,
     createRuntime: (options: CreateAcpAgentRuntimeOptions) => Promise<{
-      session: import("@earendil-works/pi-coding-agent").AgentSession;
+      session: AgentSession;
       dispose: () => void;
-      getSlashCommands?: () => import("@earendil-works/pi-coding-agent").SlashCommandInfo[];
+      getSlashCommands?: () => SlashCommandInfo[];
     }>,
   ) {
     this.connection = connection;

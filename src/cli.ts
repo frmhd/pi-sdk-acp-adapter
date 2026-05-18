@@ -22,7 +22,12 @@ import * as path from "node:path";
 
 import { AcpAgent } from "./adapter/AcpAgent.js";
 import { createAcpAgentRuntime } from "./runtime/AcpAgentRuntime.js";
-import { ModelRegistry, AuthStorage, getAgentDir } from "@earendil-works/pi-coding-agent";
+import {
+  ModelRegistry,
+  AuthStorage,
+  getAgentDir,
+  type AgentSession,
+} from "@earendil-works/pi-coding-agent";
 import type { CreateAcpAgentRuntimeOptions } from "./runtime/AcpAgentRuntime.js";
 import { parseTerminalAuthCliArgs, runTerminalAuthCli } from "./auth/terminalAuth.js";
 
@@ -134,7 +139,7 @@ function createRuntimeFactory(
   return async (
     options: Omit<CreateAcpAgentRuntimeOptions, "acpConnection" | "agentDir">,
   ): Promise<{
-    session: import("@earendil-works/pi-coding-agent").AgentSession;
+    session: AgentSession;
     dispose: () => void;
   }> => {
     return createAcpAgentRuntime({

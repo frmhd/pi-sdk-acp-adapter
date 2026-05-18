@@ -38,9 +38,7 @@ export function createMockConnection() {
 
 export function createTestAgent(
   connection: any = createMockConnection(),
-  createRuntime:
-    | ((options: any) => Promise<{ session: any; dispose: () => void }>)
-    | undefined = undefined,
+  createRuntime?: (options: any) => Promise<{ session: any; dispose: () => void }>,
 ) {
   return new AcpAgent(
     connection,
