@@ -6,7 +6,7 @@ overrides:
   vite: "catalog:"
   vitest: "catalog:"
 patchedDependencies:
-  "@earendil-works/pi-ai@0.74.0": patches/@earendil-works__pi-ai@0.74.0.patch
+  "@earendil-works/pi-ai@0.75.3": patches/@earendil-works__pi-ai@0.75.3.patch
 peerDependencyRules:
   allowAny:
     - vite
