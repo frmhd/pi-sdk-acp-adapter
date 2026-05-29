@@ -36,7 +36,7 @@ export async function listPersistedPiSessions(params: {
     .filter((entry) => entry.isDirectory())
     .map((entry) => join(root, entry.name));
   const sessions = (
-    await Promise.all(dirs.map((dir) => SessionManager.list(process.cwd(), dir).catch(() => [])))
+    await Promise.all(dirs.map((dir) => SessionManager.listAll(dir).catch(() => [])))
   ).flat();
 
   sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());

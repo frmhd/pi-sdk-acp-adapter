@@ -1,6 +1,8 @@
+diff --git a/dist/providers/openai-completions.js b/dist/providers/openai-completions.js
+index 8f94fcc83ffbba250304d0f3fc6f04a8d5982189..35cd2ffd557e3a52b522ced435e223d459a0b7a3 100644
 --- a/dist/providers/openai-completions.js
 +++ b/dist/providers/openai-completions.js
-@@ -639,7 +639,7 @@
+@@ -664,7 +664,7 @@ export function convertMessages(model, context, compat) {
              const assistantText = assistantTextParts.map((part) => part.text).join("");
              const nonEmptyThinkingBlocks = msg.content
                  .filter(isThinkingContentBlock)
@@ -9,7 +11,7 @@
              if (nonEmptyThinkingBlocks.length > 0) {
                  if (compat.requiresThinkingAsText) {
                      // Convert thinking blocks to plain text (no tags to avoid model mimicking them)
-@@ -697,6 +697,10 @@
+@@ -725,6 +725,10 @@ export function convertMessages(model, context, compat) {
                      assistantMsg.reasoning_details = reasoningDetails;
                  }
              }

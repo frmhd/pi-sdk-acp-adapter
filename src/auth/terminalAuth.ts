@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { AuthMethod } from "@agentclientprotocol/sdk";
 
 import { AuthStorage, getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { OAuthProviderInterface } from "@earendil-works/pi-ai";
+import type { OAuthProviderInterface, OAuthSelectPrompt } from "@earendil-works/pi-ai";
 
 export const ACP_TERMINAL_AUTH_FLAG = "--acp-terminal-auth";
 const ACP_TERMINAL_AUTH_METHOD_PREFIX = "terminal:";
@@ -144,6 +144,35 @@ export function buildTerminalAuthMethods(
     }));
 }
 
+async function selectOAuthLoginOption(
+  prompt: OAuthSelectPrompt,
+  question: (prompt: string) => Promise<string>,
+  output: NodeJS.WritableStream,
+): Promise<string | undefined> {
+  writeLine(output, prompt.message);
+  prompt.options.forEach((option, index) => {
+    writeLine(output, `  ${index + 1}. ${option.label}`);
+  });
+  writeLine(output);
+
+  while (true) {
+    const answer = (await question("Select an option by number (empty to cancel): ")).trim();
+    if (!answer) {
+      return undefined;
+    }
+
+    const selection = Number.parseInt(answer, 10);
+    if (Number.isInteger(selection) && selection >= 1 && selection <= prompt.options.length) {
+      return prompt.options[selection - 1]?.id;
+    }
+
+    writeLine(
+      output,
+      `Please enter a number between 1 and ${prompt.options.length}, or press Enter to cancel.`,
+    );
+  }
+}
+
 async function selectProvider(
   providers: OAuthProviderInterface[],
   preferredProviderId: string | undefined,
@@ -218,6 +247,8 @@ export async function runTerminalAuthCli(options: RunTerminalAuthCliOptions = {}
     writeLine(output, `Credentials will be stored in ${join(getAgentDir(), "auth.json")}.`);
     writeLine(output);
 
+    const question = (prompt: string) => rl.question(prompt);
+
     await authStorage.login(provider.id, {
       onAuth: (info) => {
         if (info.instructions) {
@@ -227,6 +258,16 @@ export async function runTerminalAuthCli(options: RunTerminalAuthCliOptions = {}
         writeLine(output, info.url);
         writeLine(output);
       },
+      onDeviceCode: (info) => {
+        writeLine(output, `Device authorization for ${provider.name}:`);
+        writeLine(output, `  Open: ${info.verificationUri}`);
+        writeLine(output, `  Code: ${info.userCode}`);
+        if (info.expiresInSeconds !== undefined) {
+          writeLine(output, `  Expires in ${info.expiresInSeconds} seconds.`);
+        }
+        writeLine(output);
+      },
+      onSelect: (prompt) => selectOAuthLoginOption(prompt, question, output),
       onPrompt: async (prompt) => {
         const suffix = prompt.placeholder ? ` (${prompt.placeholder})` : "";
         const answer = await rl.question(`${prompt.message}${suffix}: `);
