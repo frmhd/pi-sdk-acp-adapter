@@ -8,8 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- Updated `@agentclientprotocol/sdk` to 0.22.1 and `@earendil-works/pi-*` packages to 0.77.0.
-- Refreshed the `@earendil-works/pi-ai` pnpm patch for DeepSeek reasoning replay on 0.77.0.
+- Updated `@agentclientprotocol/sdk` to 0.25.0 and `@earendil-works/pi-*` packages to 0.78.1.
+- Refreshed the `@earendil-works/pi-ai` pnpm patch for DeepSeek reasoning replay on 0.78.1.
+- Advertise stable `additionalDirectories` session capability and include active session roots in `session/list` responses.
 - Terminal OAuth login now supports device-code and login-method selection callbacks required by Pi 0.77.
 - Cross-project session listing uses `SessionManager.listAll` for custom ACP session directories (Pi 0.77 cwd scoping).
 

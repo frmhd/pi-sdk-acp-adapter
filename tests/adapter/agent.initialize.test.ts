@@ -29,6 +29,7 @@ describe("AcpAgent initialize", () => {
     expect(response.agentCapabilities?.sessionCapabilities?.list).toEqual({});
     expect(response.agentCapabilities?.sessionCapabilities?.resume).toEqual({});
     expect(response.agentCapabilities?.sessionCapabilities?.close).toEqual({});
+    expect(response.agentCapabilities?.sessionCapabilities?.additionalDirectories).toEqual({});
     expect(agent.getClientCapabilities()).toMatchObject({
       supportsReadTextFile: true,
       supportsWriteTextFile: true,

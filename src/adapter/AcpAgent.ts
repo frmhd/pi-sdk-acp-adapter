@@ -125,7 +125,7 @@ export class AcpAgent implements Agent {
           list: {},
           fork: null,
           close: {},
-          additionalDirectories: null,
+          additionalDirectories: {},
           resume: {},
         },
       },
@@ -203,7 +203,11 @@ export class AcpAgent implements Agent {
     });
 
     return {
-      sessions: sessions.map((session) => buildAcpSessionInfo(session)),
+      sessions: sessions.map((session) =>
+        buildAcpSessionInfo(session, {
+          additionalDirectories: this.sessions.get(session.id)?.additionalDirectories,
+        }),
+      ),
       nextCursor: null,
     };
   }

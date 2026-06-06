@@ -91,14 +91,19 @@ function deriveUpdatedAtFromSession(session: AgentSession): string | null {
   return null;
 }
 
-export function buildAcpSessionInfo(info: PiSessionInfo): AcpSessionInfo {
+export function buildAcpSessionInfo(
+  info: PiSessionInfo,
+  options?: { additionalDirectories?: string[] },
+): AcpSessionInfo {
   const derivedTitle = normalizeSessionTitle(info.name) ?? normalizeSessionTitle(info.firstMessage);
+  const additionalDirectories = options?.additionalDirectories?.filter(Boolean) ?? [];
 
   return {
     cwd: info.cwd,
     sessionId: info.id,
     title: derivedTitle,
     updatedAt: info.modified.toISOString(),
+    ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
   };
 }
 
