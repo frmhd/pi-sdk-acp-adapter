@@ -1,6 +1,5 @@
 import type {
   Agent,
-  AgentSideConnection,
   AuthenticateRequest,
   AuthenticateResponse,
   CancelNotification,
@@ -21,6 +20,7 @@ import type {
   SetSessionConfigOptionRequest,
   SetSessionConfigOptionResponse,
 } from "@agentclientprotocol/sdk";
+import type { AcpAgentClientContext } from "./acpClientContext.js";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   SessionManager,
@@ -74,7 +74,7 @@ export interface AcpAdapterConfig {
 }
 
 export class AcpAgent implements Agent {
-  private connection: AgentSideConnection;
+  private connection: AcpAgentClientContext;
   private sessions: Map<string, AcpSessionState>;
   private config: AcpAdapterConfig;
   private initialized = false;
@@ -86,7 +86,7 @@ export class AcpAgent implements Agent {
   }>;
 
   constructor(
-    connection: AgentSideConnection,
+    connection: AcpAgentClientContext,
     config: AcpAdapterConfig,
     createRuntime: (options: CreateAcpAgentRuntimeOptions) => Promise<{
       session: AgentSession;

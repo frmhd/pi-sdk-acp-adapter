@@ -1,4 +1,4 @@
-import type { AgentSideConnection } from "@agentclientprotocol/sdk";
+import type { AcpAgentClientContext } from "../adapter/acpClientContext.js";
 import {
   createAgentSession,
   type AgentSession,
@@ -18,7 +18,7 @@ export interface CreateAcpAgentRuntimeOptions {
   agentDir?: string;
   additionalDirectories?: string[];
   modelRegistry: ModelRegistry;
-  acpConnection: AgentSideConnection;
+  acpConnection: AcpAgentClientContext;
   clientCapabilities: AcpClientCapabilitiesSnapshot;
   sessionManager: SessionManager;
   sessionId?: string;
@@ -72,7 +72,7 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
 }
 
 export function createAcpAgentRuntimeFactory(
-  acpConnection: AgentSideConnection,
+  acpConnection: AcpAgentClientContext,
   agentDir?: string,
 ) {
   return async (

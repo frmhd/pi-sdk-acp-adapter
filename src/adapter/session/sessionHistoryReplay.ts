@@ -1,4 +1,5 @@
-import type { AgentSideConnection, ContentBlock } from "@agentclientprotocol/sdk";
+import type { ContentBlock } from "@agentclientprotocol/sdk";
+import type { AcpAgentClientContext } from "../acpClientContext.js";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type {
   AssistantMessage,
@@ -80,7 +81,7 @@ function buildHistoricalToolContext(
 }
 
 async function replayContentChunks(
-  connection: AgentSideConnection,
+  connection: AcpAgentClientContext,
   sessionId: string,
   sessionUpdate: "user_message_chunk" | "agent_message_chunk" | "agent_thought_chunk",
   blocks: ContentBlock[],
@@ -105,7 +106,7 @@ function buildHistoricalToolResult(message: ToolResultMessage): {
 }
 
 async function replayAssistantMessage(
-  connection: AgentSideConnection,
+  connection: AcpAgentClientContext,
   sessionId: string,
   cwd: string,
   message: AssistantMessage,
@@ -151,7 +152,7 @@ async function replayAssistantMessage(
 }
 
 async function replayHistoricalToolResult(
-  connection: AgentSideConnection,
+  connection: AcpAgentClientContext,
   sessionId: string,
   cwd: string,
   message: ToolResultMessage,
@@ -200,7 +201,7 @@ async function replayHistoricalToolResult(
 }
 
 async function replayHistoricalBashExecution(
-  connection: AgentSideConnection,
+  connection: AcpAgentClientContext,
   sessionId: string,
   cwd: string,
   index: number,
@@ -255,7 +256,7 @@ async function replayHistoricalBashExecution(
 }
 
 export async function replaySessionHistory(
-  connection: AgentSideConnection,
+  connection: AcpAgentClientContext,
   sessionId: string,
   session: AgentSession,
   cwd: string,

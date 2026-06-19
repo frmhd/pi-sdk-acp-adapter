@@ -1,7 +1,7 @@
 import { readFile as fsReadFile } from "node:fs/promises";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 
-import type { AgentSideConnection } from "@agentclientprotocol/sdk";
+import type { AcpAgentClientContext } from "./acpClientContext.js";
 
 import { getAuthorizedRoots, shouldBypassAcpRead } from "./AcpToolBridge.js";
 import type { AcpClientCapabilitiesSnapshot } from "./types.js";
@@ -10,7 +10,7 @@ export interface ResolvePromptPathsOptions {
   text: string;
   cwd: string;
   additionalDirectories: string[];
-  connection: AgentSideConnection;
+  connection: AcpAgentClientContext;
   sessionId: string;
   clientCapabilities: AcpClientCapabilitiesSnapshot;
 }

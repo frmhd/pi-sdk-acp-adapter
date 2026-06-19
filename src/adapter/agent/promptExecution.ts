@@ -1,9 +1,5 @@
-import type {
-  AgentSideConnection,
-  PromptRequest,
-  PromptResponse,
-  StopReason,
-} from "@agentclientprotocol/sdk";
+import type { PromptRequest, PromptResponse, StopReason } from "@agentclientprotocol/sdk";
+import type { AcpAgentClientContext } from "../acpClientContext.js";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
 
@@ -33,7 +29,7 @@ function isAbortError(error: unknown): boolean {
 
 function enqueueErrorChunk(
   enqueue: (work: () => Promise<void>) => void,
-  connection: AgentSideConnection,
+  connection: AcpAgentClientContext,
   sessionId: string,
   text: string,
   label: string,
@@ -54,7 +50,7 @@ function enqueueErrorChunk(
 }
 
 export async function executePrompt(options: {
-  connection: AgentSideConnection;
+  connection: AcpAgentClientContext;
   request: PromptRequest;
   sessionState: AcpSessionState;
   clientCapabilities: AcpClientCapabilitiesSnapshot;

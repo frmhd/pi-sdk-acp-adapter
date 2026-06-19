@@ -1,19 +1,19 @@
 import type {
-  AgentSideConnection,
   AvailableCommand,
   SessionConfigOption,
   SessionNotification,
 } from "@agentclientprotocol/sdk";
+import type { AcpAgentClientContext } from "../acpClientContext.js";
 
 export async function emitSessionNotification(
-  connection: AgentSideConnection,
+  connection: AcpAgentClientContext,
   notification: SessionNotification,
 ): Promise<void> {
   await connection.sessionUpdate(notification);
 }
 
 export async function emitSessionInfoUpdate(
-  connection: AgentSideConnection,
+  connection: AcpAgentClientContext,
   sessionId: string,
   metadata: { title: string | null; updatedAt: string | null },
 ): Promise<void> {
@@ -28,7 +28,7 @@ export async function emitSessionInfoUpdate(
 }
 
 export async function emitUsageUpdate(
-  connection: AgentSideConnection,
+  connection: AcpAgentClientContext,
   sessionId: string,
   usage: {
     size: number;
@@ -46,7 +46,7 @@ export async function emitUsageUpdate(
 }
 
 export async function emitConfigOptionsUpdate(
-  connection: AgentSideConnection,
+  connection: AcpAgentClientContext,
   sessionId: string,
   configOptions: SessionConfigOption[],
 ): Promise<void> {
@@ -60,7 +60,7 @@ export async function emitConfigOptionsUpdate(
 }
 
 export async function emitAvailableCommandsUpdate(
-  connection: AgentSideConnection,
+  connection: AcpAgentClientContext,
   sessionId: string,
   availableCommands: AvailableCommand[],
 ): Promise<void> {

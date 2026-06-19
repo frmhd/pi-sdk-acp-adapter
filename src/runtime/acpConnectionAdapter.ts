@@ -1,16 +1,18 @@
-import type { AgentSideConnection, EnvVariable, TerminalHandle } from "@agentclientprotocol/sdk";
+import type { EnvVariable, TerminalHandle } from "@agentclientprotocol/sdk";
+
+import type { AcpAgentClientContext } from "../adapter/acpClientContext.js";
 
 import type { AcpClientCapabilitiesSnapshot } from "../adapter/types.js";
 import type { AcpClientInterface } from "../adapter/AcpToolBridge.js";
 
 /** Adapts an ACP connection to the tool bridge client interface used by Pi tools. */
 export class AcpConnectionAdapter implements AcpClientInterface {
-  private connection: AgentSideConnection;
+  private connection: AcpAgentClientContext;
   public readonly sessionId: string;
   public readonly capabilities: AcpClientCapabilitiesSnapshot;
 
   constructor(
-    connection: AgentSideConnection,
+    connection: AcpAgentClientContext,
     sessionId: string,
     capabilities: AcpClientCapabilitiesSnapshot,
   ) {

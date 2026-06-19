@@ -1,4 +1,5 @@
-import type { AgentSideConnection, Implementation } from "@agentclientprotocol/sdk";
+import type { Implementation } from "@agentclientprotocol/sdk";
+import type { AcpAgentClientContext } from "../acpClientContext.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 import type { AcpSessionState } from "../types.js";
@@ -33,7 +34,7 @@ export function getSessionConfigOptions(
 }
 
 export async function refreshSessionMetadata(
-  connection: AgentSideConnection,
+  connection: AcpAgentClientContext,
   sessionState: AcpSessionState,
   force = false,
 ): Promise<void> {
@@ -55,7 +56,7 @@ export async function refreshSessionMetadata(
 }
 
 export async function refreshSessionUsage(
-  connection: AgentSideConnection,
+  connection: AcpAgentClientContext,
   sessionState: AcpSessionState,
   force = false,
 ): Promise<void> {
@@ -82,7 +83,7 @@ export async function refreshSessionUsage(
 }
 
 export async function refreshConfigOptions(
-  connection: AgentSideConnection,
+  connection: AcpAgentClientContext,
   sessionState: AcpSessionState,
   modelRegistry: ModelRegistry,
   clientInfo?: Implementation | null,
@@ -103,7 +104,7 @@ export async function refreshConfigOptions(
 }
 
 export async function refreshAvailableCommands(
-  connection: AgentSideConnection,
+  connection: AcpAgentClientContext,
   sessionState: AcpSessionState,
   force = false,
 ): Promise<void> {

@@ -20,7 +20,8 @@ import { Writable, Readable } from "node:stream";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { AcpAgent } from "./adapter/AcpAgent.js";
+import { createAcpAgentApp } from "./adapter/acpAgentApp.js";
+import type { AcpAgentClientContext } from "./adapter/acpClientContext.js";
 import { createAcpAgentRuntime } from "./runtime/AcpAgentRuntime.js";
 import {
   ModelRegistry,
@@ -132,10 +133,7 @@ function createAdapterConfig(): {
  * This factory is called for each new session to create a Pi AgentSession
  * configured with ACP tool delegation.
  */
-function createRuntimeFactory(
-  acpConnection: acp.AgentSideConnection,
-  config: { agentDir: string },
-) {
+function createRuntimeFactory(acpConnection: AcpAgentClientContext, config: { agentDir: string }) {
   return async (
     options: Omit<CreateAcpAgentRuntimeOptions, "acpConnection" | "agentDir">,
   ): Promise<{
@@ -189,43 +187,23 @@ async function main(): Promise<void> {
     const output = Writable.toWeb(process.stdout) as WritableStream<Uint8Array>;
     const input = Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>;
 
-    // TODO: Migrate from deprecated ACP 0.27 APIs (`ndJsonStream`, `AgentSideConnection`)
-    // to the new agent/client design. See:
-    // https://github.com/agentclientprotocol/typescript-sdk/blob/main/MIGRATION_0.26_0.27.md
-
     // Create NDJSON stream for protocol encoding/decoding
     const stream = acp.ndJsonStream(output, input);
 
-    // Keep track of the agent for cleanup
-    let agent: AcpAgent | undefined;
+    const { app, shutdownAgent } = createAcpAgentApp({
+      config: { modelRegistry: config.modelRegistry, agentDir: config.agentDir },
+      createRuntimeFactory: (clientContext) => (runtimeOptions) =>
+        createRuntimeFactory(clientContext, { agentDir: config.agentDir })(runtimeOptions),
+    });
 
-    // Create the ACP connection
-    // The callback is invoked when a new connection is established
-    const connection = new acp.AgentSideConnection((conn: acp.AgentSideConnection) => {
-      // Create runtime factory for this connection
-      const runtimeFactory = createRuntimeFactory(conn, {
-        agentDir: config.agentDir,
-      });
-
-      // Create the ACP Agent with Pi integration
-      // agentDir is passed here so AcpAgent.newSession can use this.config.agentDir directly
-      agent = new AcpAgent(
-        conn,
-        { modelRegistry: config.modelRegistry, agentDir: config.agentDir },
-        runtimeFactory,
-      );
-
-      return agent;
-    }, stream);
+    const connection = app.connect(stream);
 
     // Handle connection closure
     connection.signal.addEventListener("abort", () => {
       console.error("[pi-acp] Connection closed, shutting down...");
-      if (agent) {
-        agent.shutdown().catch((err) => {
-          console.error("[pi-acp] Error during shutdown:", err);
-        });
-      }
+      shutdownAgent().catch((err) => {
+        console.error("[pi-acp] Error during shutdown:", err);
+      });
     });
 
     // Wait for connection to close
