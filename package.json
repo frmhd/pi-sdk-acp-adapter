@@ -46,10 +46,10 @@
     "prepare": "vp config"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "0.25.0",
-    "@earendil-works/pi-agent-core": "0.78.1",
-    "@earendil-works/pi-ai": "0.78.1",
-    "@earendil-works/pi-coding-agent": "0.78.1"
+    "@agentclientprotocol/sdk": "0.28.1",
+    "@earendil-works/pi-agent-core": "0.79.8",
+    "@earendil-works/pi-ai": "0.79.8",
+    "@earendil-works/pi-coding-agent": "0.79.8"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

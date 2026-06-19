@@ -189,6 +189,10 @@ async function main(): Promise<void> {
     const output = Writable.toWeb(process.stdout) as WritableStream<Uint8Array>;
     const input = Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>;
 
+    // TODO: Migrate from deprecated ACP 0.27 APIs (`ndJsonStream`, `AgentSideConnection`)
+    // to the new agent/client design. See:
+    // https://github.com/agentclientprotocol/typescript-sdk/blob/main/MIGRATION_0.26_0.27.md
+
     // Create NDJSON stream for protocol encoding/decoding
     const stream = acp.ndJsonStream(output, input);
 
