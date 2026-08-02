@@ -51,7 +51,7 @@ describe("ACP runtime terminal fallback", () => {
 
     await createAcpAgentRuntime({
       cwd: process.cwd(),
-      modelRegistry: { getAvailable: () => [] } as any,
+      modelRuntime: { getAvailableSnapshot: () => [], getModel: () => undefined } as any,
       acpConnection: connection,
       clientCapabilities: {
         raw: null,

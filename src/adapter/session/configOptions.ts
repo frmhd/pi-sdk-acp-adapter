@@ -6,7 +6,7 @@ import type {
   SessionConfigSelectOption,
   SessionConfigSelectOptions,
 } from "@agentclientprotocol/sdk";
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 
@@ -22,6 +22,7 @@ export const ALL_THINKING_LEVELS: ThinkingLevel[] = [
   "medium",
   "high",
   "xhigh",
+  "max",
 ];
 
 const THINKING_LEVEL_LABELS: Record<ThinkingLevel, string> = {
@@ -31,10 +32,11 @@ const THINKING_LEVEL_LABELS: Record<ThinkingLevel, string> = {
   medium: "Medium",
   high: "High",
   xhigh: "Extra High",
+  max: "Max",
 };
 
-export function getAvailableModels(modelRegistry: ModelRegistry): Model<Api>[] {
-  return modelRegistry.getAvailable();
+export function getAvailableModels(modelRuntime: ModelRuntime): Model<Api>[] {
+  return [...modelRuntime.getAvailableSnapshot()];
 }
 
 export function getModelOptionValue(model: ModelOptionIdentity): string {

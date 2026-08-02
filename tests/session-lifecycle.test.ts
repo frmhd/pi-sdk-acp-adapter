@@ -183,9 +183,11 @@ describe("AcpAgent session lifecycle", () => {
       connection,
       {
         agentDir,
-        modelRegistry: {
-          getAvailable: () => [],
-          authStorage: { getOAuthProviders: () => [] },
+        modelRuntime: {
+          getProviders: () => [],
+          getAvailableSnapshot: () => [],
+          refresh: vi.fn(async () => ({ aborted: false, errors: new Map() })),
+          checkAuth: vi.fn(async () => undefined),
         } as any,
       },
       runtime.createRuntime,
@@ -239,9 +241,11 @@ describe("AcpAgent session lifecycle", () => {
         connection,
         {
           agentDir,
-          modelRegistry: {
-            getAvailable: () => [],
-            authStorage: { getOAuthProviders: () => [] },
+          modelRuntime: {
+            getProviders: () => [],
+            getAvailableSnapshot: () => [],
+            refresh: vi.fn(async () => ({ aborted: false, errors: new Map() })),
+            checkAuth: vi.fn(async () => undefined),
           } as any,
         },
         runtime.createRuntime,
@@ -298,9 +302,11 @@ describe("AcpAgent session lifecycle", () => {
         connection,
         {
           agentDir,
-          modelRegistry: {
-            getAvailable: () => [],
-            authStorage: { getOAuthProviders: () => [] },
+          modelRuntime: {
+            getProviders: () => [],
+            getAvailableSnapshot: () => [],
+            refresh: vi.fn(async () => ({ aborted: false, errors: new Map() })),
+            checkAuth: vi.fn(async () => undefined),
           } as any,
         },
         runtime.createRuntime,
@@ -420,9 +426,11 @@ describe("AcpAgent session lifecycle", () => {
       connection,
       {
         agentDir,
-        modelRegistry: {
-          getAvailable: () => [],
-          authStorage: { getOAuthProviders: () => [] },
+        modelRuntime: {
+          getProviders: () => [],
+          getAvailableSnapshot: () => [],
+          refresh: vi.fn(async () => ({ aborted: false, errors: new Map() })),
+          checkAuth: vi.fn(async () => undefined),
         } as any,
       },
       createRuntime,
@@ -483,9 +491,11 @@ describe("AcpAgent session lifecycle", () => {
       connection,
       {
         agentDir,
-        modelRegistry: {
-          getAvailable: () => [],
-          authStorage: { getOAuthProviders: () => [] },
+        modelRuntime: {
+          getProviders: () => [],
+          getAvailableSnapshot: () => [],
+          refresh: vi.fn(async () => ({ aborted: false, errors: new Map() })),
+          checkAuth: vi.fn(async () => undefined),
         } as any,
       },
       runtime.createRuntime,

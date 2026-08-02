@@ -17,9 +17,11 @@ export function createMockSession() {
       messages: [],
       model: undefined,
     },
-    modelRegistry: {
-      find: vi.fn(() => undefined),
-      hasConfiguredAuth: vi.fn(() => false),
+    modelRuntime: {
+      getModel: vi.fn(() => undefined),
+      getAvailableSnapshot: vi.fn(() => []),
+      checkAuth: vi.fn(async () => undefined),
+      completeSimple: vi.fn(),
     },
     thinkingLevel: "medium",
     dispose: vi.fn(),
@@ -43,14 +45,11 @@ export function createTestAgent(
   return new AcpAgent(
     connection,
     {
-      modelRegistry: {
-        getAvailable: () => [],
-        refresh: vi.fn(() => undefined),
-        authStorage: {
-          getOAuthProviders: () => [],
-          reload: vi.fn(() => undefined),
-          hasAuth: vi.fn(() => false),
-        },
+      modelRuntime: {
+        getAvailableSnapshot: () => [],
+        getProviders: () => [],
+        refresh: vi.fn(async () => ({ aborted: false, errors: new Map() })),
+        checkAuth: vi.fn(async () => undefined),
       } as any,
     },
     createRuntime ??

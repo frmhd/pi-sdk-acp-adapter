@@ -89,7 +89,11 @@ describe("ACP session config model values", () => {
 
     const thinkingOption = options.find((option) => option.id === "thinking_level") as any;
     expect(thinkingOption.currentValue).toBe("high");
-    expect(thinkingOption.options.map((option: any) => option.value)).toEqual(["high", "xhigh"]);
+    expect(thinkingOption.options.map((option: any) => option.value)).toEqual([
+      "high",
+      "xhigh",
+      "max",
+    ]);
   });
 
   test("setSessionConfigOption rejects thinking levels unsupported by current model", async () => {

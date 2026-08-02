@@ -1,5 +1,4 @@
-import { completeSimple, getEnvApiKey } from "@earendil-works/pi-ai";
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 import { normalizeSessionTitle } from "../session/sessionMetadata.js";
 
@@ -31,9 +30,9 @@ export function getSmallModelSpec(): { provider: string; modelId: string } | nul
 
 export async function generateSessionTitle(
   userText: string,
-  modelRegistry: ModelRegistry,
+  modelRuntime: ModelRuntime,
 ): Promise<string | null> {
-  return generateTitleWithPrompt(userText, modelRegistry, TITLE_GENERATION_SYSTEM_PROMPT);
+  return generateTitleWithPrompt(userText, modelRuntime, TITLE_GENERATION_SYSTEM_PROMPT);
 }
 
 const MAX_MESSAGES_FOR_TITLE = 20;
@@ -41,7 +40,7 @@ const MAX_COMBINED_TEXT_LENGTH = 4000;
 
 export async function generateSessionTitleFromMessages(
   userMessages: string[],
-  modelRegistry: ModelRegistry,
+  modelRuntime: ModelRuntime,
 ): Promise<string | null> {
   if (userMessages.length === 0) return null;
 
@@ -55,18 +54,18 @@ export async function generateSessionTitleFromMessages(
     combinedText = combinedText.slice(0, MAX_COMBINED_TEXT_LENGTH).trimEnd() + "\n\n[...]";
   }
 
-  return generateTitleWithPrompt(combinedText, modelRegistry, TITLE_REGENERATION_SYSTEM_PROMPT);
+  return generateTitleWithPrompt(combinedText, modelRuntime, TITLE_REGENERATION_SYSTEM_PROMPT);
 }
 
 async function generateTitleWithPrompt(
   userText: string,
-  modelRegistry: ModelRegistry,
+  modelRuntime: ModelRuntime,
   systemPrompt: string,
 ): Promise<string | null> {
   const spec = getSmallModelSpec();
   if (!spec) return null;
 
-  const model = modelRegistry.find(spec.provider, spec.modelId);
+  const model = modelRuntime.getModel(spec.provider, spec.modelId);
   if (!model) {
     if (process.env.DEBUG) {
       console.warn(
@@ -80,7 +79,8 @@ async function generateTitleWithPrompt(
   // This keeps title generation zero-config when the user picks a model
   // from a provider they already use (e.g. main model = anthropic/claude-sonnet-4,
   // title model = anthropic/claude-haiku-4).
-  if (!modelRegistry.hasConfiguredAuth(model)) {
+  const auth = await modelRuntime.checkAuth(spec.provider);
+  if (!auth) {
     if (process.env.DEBUG) {
       console.warn(
         `[title-generation] Auth not configured for ${spec.provider}. ` +
@@ -90,32 +90,17 @@ async function generateTitleWithPrompt(
     return null;
   }
 
-  const auth = await modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok) {
-    if (process.env.DEBUG) {
-      console.warn(
-        `[title-generation] Auth lookup failed for ${spec.provider}/${spec.modelId}: ${auth.error}. Skipping.`,
-      );
-    }
-    return null;
-  }
-
-  // Resolve API key: prefer Pi auth storage, fall back to env var lookup
-  // (same fallback chain the provider functions use internally).
-  const apiKey = auth.apiKey ?? getEnvApiKey(spec.provider);
-
   if (process.env.DEBUG) {
     console.warn("[title-generation] resolved auth:", {
-      hasStorageKey: !!auth.apiKey,
-      hasEnvKey: !!getEnvApiKey(spec.provider),
-      hasHeaders: !!auth.headers,
+      source: auth.source ?? null,
+      type: auth.type,
     });
   }
 
   // No outer try/catch: let unexpected API/network errors propagate.
   // Callers that need graceful degradation (e.g., automatic title generation
   // on the first prompt) should handle exceptions at their own boundary.
-  const response = await completeSimple(
+  const response = await modelRuntime.completeSimple(
     model,
     {
       systemPrompt,
@@ -129,8 +114,6 @@ async function generateTitleWithPrompt(
     },
     {
       temperature: 0.3,
-      apiKey,
-      ...(auth.headers && { headers: auth.headers }),
     },
   );
 

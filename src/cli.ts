@@ -23,12 +23,7 @@ import * as path from "node:path";
 import { createAcpAgentApp } from "./adapter/acpAgentApp.js";
 import type { AcpAgentClientContext } from "./adapter/acpClientContext.js";
 import { createAcpAgentRuntime } from "./runtime/AcpAgentRuntime.js";
-import {
-  ModelRegistry,
-  AuthStorage,
-  getAgentDir,
-  type AgentSession,
-} from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, getAgentDir, type AgentSession } from "@earendil-works/pi-coding-agent";
 import type { CreateAcpAgentRuntimeOptions } from "./runtime/AcpAgentRuntime.js";
 import { parseTerminalAuthCliArgs, runTerminalAuthCli } from "./auth/terminalAuth.js";
 
@@ -98,15 +93,12 @@ function setupSignalHandlers(): void {
 /**
  * Create the adapter configuration from environment and defaults.
  */
-function createAdapterConfig(): {
-  modelRegistry: ModelRegistry;
+async function createAdapterConfig(): Promise<{
+  modelRuntime: ModelRuntime;
   agentDir: string;
-} {
-  // Create auth storage for API key resolution
-  const authStorage = AuthStorage.create();
-
-  // Create model registry for API key resolution
-  const modelRegistry = ModelRegistry.create(authStorage);
+}> {
+  // Create the canonical model/auth runtime (auth.json + models.json).
+  const modelRuntime = await ModelRuntime.create();
 
   // Get agent directory from Pi SDK
   let agentDir: string;
@@ -118,7 +110,7 @@ function createAdapterConfig(): {
   }
 
   return {
-    modelRegistry,
+    modelRuntime,
     agentDir,
   };
 }
@@ -178,7 +170,7 @@ async function main(): Promise<void> {
 
   try {
     // Get adapter configuration
-    const config = createAdapterConfig();
+    const config = await createAdapterConfig();
 
     // Convert Node.js stdio streams to Web Streams for the ACP NDJSON layer.
     // process.stdout is a Node.js Socket; ndJsonStream needs WritableStream.
@@ -191,7 +183,13 @@ async function main(): Promise<void> {
     const stream = acp.ndJsonStream(output, input);
 
     const { app, shutdownAgent } = createAcpAgentApp({
-      config: { modelRegistry: config.modelRegistry, agentDir: config.agentDir },
+      config: {
+        modelRuntime: config.modelRuntime,
+        agentDir: config.agentDir,
+        // Terminal auth runs in a separate process and writes auth.json;
+        // rebuild the runtime so credentials are picked up on authenticate().
+        reloadModelRuntime: () => ModelRuntime.create(),
+      },
       createRuntimeFactory: (clientContext) => (runtimeOptions) =>
         createRuntimeFactory(clientContext, { agentDir: config.agentDir })(runtimeOptions),
     });

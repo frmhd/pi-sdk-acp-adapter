@@ -15,7 +15,7 @@ import {
   getAgentDir,
   type CreateAgentSessionOptions,
   type ExtensionContext,
-  type ModelRegistry,
+  type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 
 import { findModelById } from "../adapter/AcpSessionConfig.js";
@@ -197,13 +197,13 @@ async function mapWithConcurrencyLimit<TIn, TOut>(
 function resolveSubagentModel(
   modelSpec: string | undefined,
   currentModel: Model<Api> | undefined,
-  modelRegistry: ModelRegistry,
+  modelRuntime: ModelRuntime,
 ): Model<Api> | undefined {
   if (!modelSpec) {
     return currentModel;
   }
 
-  const available = modelRegistry.getAvailable();
+  const available = [...modelRuntime.getAvailableSnapshot()];
   const slashIndex = modelSpec.indexOf("/");
   if (slashIndex > 0) {
     const provider = modelSpec.slice(0, slashIndex);
@@ -244,7 +244,7 @@ function makeDetails(
 async function runSingleAgent(options: {
   defaultCwd: string;
   agentDir?: string;
-  modelRegistry: ModelRegistry;
+  modelRuntime: ModelRuntime;
   agents: SubagentConfig[];
   agentName: string;
   task: string;
@@ -324,14 +324,14 @@ async function runSingleAgent(options: {
     const model = resolveSubagentModel(
       agent.model,
       options.ctx.model as Model<Api> | undefined,
-      options.modelRegistry,
+      options.modelRuntime,
     );
     const customTools = options.createChildCustomTools(cwd);
 
     const created = await createAgentSession({
       cwd,
       agentDir: options.agentDir,
-      modelRegistry: options.modelRegistry,
+      modelRuntime: options.modelRuntime,
       model,
       tools: getAllowedToolNames(agent),
       customTools,
@@ -412,7 +412,7 @@ async function runSingleAgent(options: {
 export function createSubagentTool(options: {
   cwd: string;
   agentDir?: string;
-  modelRegistry: ModelRegistry;
+  modelRuntime: ModelRuntime;
   createChildCustomTools: (cwd: string) => NonNullable<CreateAgentSessionOptions["customTools"]>;
 }): AcpSessionTool {
   return markToolBackend(
@@ -489,7 +489,7 @@ export function createSubagentTool(options: {
             const result = await runSingleAgent({
               defaultCwd: ctx.cwd,
               agentDir: options.agentDir,
-              modelRegistry: options.modelRegistry,
+              modelRuntime: options.modelRuntime,
               agents,
               agentName: step.agent,
               task,
@@ -582,7 +582,7 @@ export function createSubagentTool(options: {
               const result = await runSingleAgent({
                 defaultCwd: ctx.cwd,
                 agentDir: options.agentDir,
-                modelRegistry: options.modelRegistry,
+                modelRuntime: options.modelRuntime,
                 agents,
                 agentName: task.agent,
                 task: task.task,
@@ -629,7 +629,7 @@ export function createSubagentTool(options: {
           const result = await runSingleAgent({
             defaultCwd: ctx.cwd,
             agentDir: options.agentDir,
-            modelRegistry: options.modelRegistry,
+            modelRuntime: options.modelRuntime,
             agents,
             agentName: params.agent,
             task: params.task,

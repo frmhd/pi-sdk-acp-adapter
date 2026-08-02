@@ -1,10 +1,10 @@
-import { createInterface } from "node:readline/promises";
+import { createInterface, type Interface } from "node:readline/promises";
 import { join } from "node:path";
 
 import type { AuthMethod } from "@agentclientprotocol/sdk";
 
-import { AuthStorage, getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { OAuthProviderInterface, OAuthSelectPrompt } from "@earendil-works/pi-ai";
+import { getAgentDir, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { AuthEvent, AuthPrompt, Provider } from "@earendil-works/pi-ai";
 
 export const ACP_TERMINAL_AUTH_FLAG = "--acp-terminal-auth";
 const ACP_TERMINAL_AUTH_METHOD_PREFIX = "terminal:";
@@ -17,7 +17,7 @@ export interface ParsedTerminalAuthCliArgs {
 
 export interface RunTerminalAuthCliOptions {
   providerId?: string;
-  authStorage?: Pick<AuthStorage, "getOAuthProviders" | "login">;
+  modelRuntime?: Pick<ModelRuntime, "getProviders" | "login">;
   io?: {
     input?: NodeJS.ReadableStream;
     output?: NodeJS.WritableStream;
@@ -68,7 +68,7 @@ function getLegacyTerminalAuthCommand(currentArgv: string[]): {
 }
 
 function buildLegacyTerminalAuthMeta(
-  provider: OAuthProviderInterface,
+  provider: Provider,
   currentArgv: string[],
 ): {
   [key: string]: unknown;
@@ -122,30 +122,35 @@ export function getProviderIdFromTerminalAuthMethodId(methodId: string): string 
   return normalizeProviderId(methodId.slice(ACP_TERMINAL_AUTH_METHOD_PREFIX.length));
 }
 
+/** OAuth-capable providers from a ModelRuntime, sorted by display name. */
+export function getOAuthProviders(modelRuntime: Pick<ModelRuntime, "getProviders">): Provider[] {
+  return modelRuntime
+    .getProviders()
+    .filter((provider) => provider.auth.oauth !== undefined)
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export function buildTerminalAuthMethods(
-  authStorage: Pick<AuthStorage, "getOAuthProviders">,
+  modelRuntime: Pick<ModelRuntime, "getProviders">,
   options: {
     currentArgv?: string[];
   } = {},
 ): AuthMethod[] {
   const currentArgv = options.currentArgv ?? process.argv;
 
-  return authStorage
-    .getOAuthProviders()
-    .slice()
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((provider) => ({
-      id: buildTerminalAuthMethodId(provider.id),
-      name: provider.name,
-      description: `Authenticate Pi with ${provider.name} in an interactive terminal session.`,
-      type: "terminal" as const,
-      args: [ACP_TERMINAL_AUTH_FLAG, provider.id],
-      _meta: buildLegacyTerminalAuthMeta(provider, currentArgv),
-    }));
+  return getOAuthProviders(modelRuntime).map((provider) => ({
+    id: buildTerminalAuthMethodId(provider.id),
+    name: provider.name,
+    description: `Authenticate Pi with ${provider.name} in an interactive terminal session.`,
+    type: "terminal" as const,
+    args: [ACP_TERMINAL_AUTH_FLAG, provider.id],
+    _meta: buildLegacyTerminalAuthMeta(provider, currentArgv),
+  }));
 }
 
 async function selectOAuthLoginOption(
-  prompt: OAuthSelectPrompt,
+  prompt: Extract<AuthPrompt, { type: "select" }>,
   question: (prompt: string) => Promise<string>,
   output: NodeJS.WritableStream,
 ): Promise<string | undefined> {
@@ -174,11 +179,11 @@ async function selectOAuthLoginOption(
 }
 
 async function selectProvider(
-  providers: OAuthProviderInterface[],
+  providers: Provider[],
   preferredProviderId: string | undefined,
   question: (prompt: string) => Promise<string>,
   output: NodeJS.WritableStream,
-): Promise<OAuthProviderInterface> {
+): Promise<Provider> {
   if (preferredProviderId) {
     const provider = providers.find((candidate) => candidate.id === preferredProviderId);
     if (!provider) {
@@ -211,8 +216,87 @@ async function selectProvider(
   }
 }
 
+/**
+ * Ask a readline question, rejecting when the optional AbortSignal fires.
+ * Used to honor per-prompt cancellation from the Pi login flow (e.g. a
+ * `manual_code` prompt raced against a local OAuth callback server).
+ */
+function questionWithSignal(rl: Interface, prompt: string, signal?: AbortSignal): Promise<string> {
+  return signal ? rl.question(prompt, { signal }) : rl.question(prompt);
+}
+
+function handleAuthPrompt(
+  rl: Interface,
+  output: NodeJS.WritableStream,
+): (prompt: AuthPrompt) => Promise<string> {
+  return async (prompt) => {
+    switch (prompt.type) {
+      case "text":
+      case "secret": {
+        const suffix = prompt.placeholder ? ` (${prompt.placeholder})` : "";
+        return questionWithSignal(rl, `${prompt.message}${suffix}: `, prompt.signal);
+      }
+      case "select": {
+        const optionId = await selectOAuthLoginOption(
+          prompt,
+          (question) => questionWithSignal(rl, question, prompt.signal),
+          output,
+        );
+        if (optionId === undefined) {
+          throw new Error("Login canceled.");
+        }
+        return optionId;
+      }
+      case "manual_code": {
+        const suffix = prompt.placeholder ? ` (${prompt.placeholder})` : "";
+        return questionWithSignal(rl, `${prompt.message}${suffix}: `, prompt.signal);
+      }
+    }
+  };
+}
+
+function handleAuthEvent(
+  output: NodeJS.WritableStream,
+  providerName: string,
+): (event: AuthEvent) => void {
+  return (event) => {
+    switch (event.type) {
+      case "info":
+        writeLine(output, event.message);
+        for (const link of event.links ?? []) {
+          writeLine(output, link.url);
+        }
+        writeLine(output);
+        break;
+      case "auth_url":
+        if (event.instructions) {
+          writeLine(output, event.instructions);
+        }
+        writeLine(output, `Open this URL to continue ${providerName} authentication:`);
+        writeLine(output, event.url);
+        writeLine(output);
+        break;
+      case "device_code":
+        writeLine(output, `Device authorization for ${providerName}:`);
+        writeLine(output, `  Open: ${event.verificationUri}`);
+        writeLine(output, `  Code: ${event.userCode}`);
+        if (event.expiresInSeconds !== undefined) {
+          writeLine(output, `  Expires in ${event.expiresInSeconds} seconds.`);
+        }
+        if (event.intervalSeconds !== undefined) {
+          writeLine(output, `  Polling interval: ${event.intervalSeconds} seconds.`);
+        }
+        writeLine(output);
+        break;
+      case "progress":
+        writeLine(output, event.message);
+        break;
+    }
+  };
+}
+
 export async function runTerminalAuthCli(options: RunTerminalAuthCliOptions = {}): Promise<number> {
-  const authStorage = options.authStorage ?? AuthStorage.create();
+  const modelRuntime = options.modelRuntime ?? (await ModelRuntime.create());
   const input = options.io?.input ?? process.stdin;
   const output = options.io?.output ?? process.stdout;
   const error = options.io?.error ?? process.stderr;
@@ -223,10 +307,7 @@ export async function runTerminalAuthCli(options: RunTerminalAuthCliOptions = {}
     return 1;
   }
 
-  const providers = authStorage
-    .getOAuthProviders()
-    .slice()
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const providers = getOAuthProviders(modelRuntime);
 
   if (providers.length === 0) {
     writeLine(error, "[pi-acp] No OAuth providers are available for terminal auth.");
@@ -247,41 +328,9 @@ export async function runTerminalAuthCli(options: RunTerminalAuthCliOptions = {}
     writeLine(output, `Credentials will be stored in ${join(getAgentDir(), "auth.json")}.`);
     writeLine(output);
 
-    const question = (prompt: string) => rl.question(prompt);
-
-    await authStorage.login(provider.id, {
-      onAuth: (info) => {
-        if (info.instructions) {
-          writeLine(output, info.instructions);
-        }
-        writeLine(output, `Open this URL to continue ${provider.name} authentication:`);
-        writeLine(output, info.url);
-        writeLine(output);
-      },
-      onDeviceCode: (info) => {
-        writeLine(output, `Device authorization for ${provider.name}:`);
-        writeLine(output, `  Open: ${info.verificationUri}`);
-        writeLine(output, `  Code: ${info.userCode}`);
-        if (info.expiresInSeconds !== undefined) {
-          writeLine(output, `  Expires in ${info.expiresInSeconds} seconds.`);
-        }
-        writeLine(output);
-      },
-      onSelect: (prompt) => selectOAuthLoginOption(prompt, question, output),
-      onPrompt: async (prompt) => {
-        const suffix = prompt.placeholder ? ` (${prompt.placeholder})` : "";
-        const answer = await rl.question(`${prompt.message}${suffix}: `);
-        if (!answer && !prompt.allowEmpty) {
-          writeLine(output, "A value is required.");
-          return rl.question(`${prompt.message}${suffix}: `);
-        }
-        return answer;
-      },
-      onProgress: (message) => {
-        writeLine(output, message);
-      },
-      onManualCodeInput: () =>
-        rl.question("Paste the full redirect URL or authorization code, then press Enter: "),
+    await modelRuntime.login(provider.id, "oauth", {
+      prompt: handleAuthPrompt(rl, output),
+      notify: handleAuthEvent(output, provider.name),
     });
 
     writeLine(output);

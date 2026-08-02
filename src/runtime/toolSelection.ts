@@ -2,7 +2,7 @@ import {
   createReadToolDefinition,
   type CreateAgentSessionOptions,
   type EditOperations,
-  type ModelRegistry,
+  type ModelRuntime,
   type ReadOperations,
   type WriteOperations,
 } from "@earendil-works/pi-coding-agent";
@@ -31,7 +31,7 @@ export interface BuildAcpSessionToolsOptions {
   cwd: string;
   additionalDirectories: string[];
   agentDir?: string;
-  modelRegistry: ModelRegistry;
+  modelRuntime: ModelRuntime;
   acpClient: AcpClientInterface;
   clientCapabilities: AcpClientCapabilitiesSnapshot;
   onToolCallStateCaptured?: (toolCallId: string, update: Partial<AcpToolCallState>) => void;
@@ -140,7 +140,7 @@ export function buildAcpSessionTools(options: BuildAcpSessionToolsOptions): AcpS
   const subagentTool = createSubagentTool({
     cwd: options.cwd,
     agentDir: options.agentDir,
-    modelRegistry: options.modelRegistry,
+    modelRuntime: options.modelRuntime,
     createChildCustomTools,
   });
 

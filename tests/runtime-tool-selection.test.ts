@@ -58,7 +58,7 @@ describe("ACP runtime tool selection", () => {
 
     await createAcpAgentRuntime({
       cwd: "/workspace/project",
-      modelRegistry: { getAvailable: () => [] } as any,
+      modelRuntime: { getAvailableSnapshot: () => [], getModel: () => undefined } as any,
       acpConnection: createMockConnection(),
       clientCapabilities: {
         raw: null,
@@ -155,7 +155,7 @@ describe("ACP runtime tool selection", () => {
       await createAcpAgentRuntime({
         cwd,
         agentDir,
-        modelRegistry: { getAvailable: () => [] } as any,
+        modelRuntime: { getAvailableSnapshot: () => [], getModel: () => undefined } as any,
         acpConnection: createMockConnection(),
         clientCapabilities: {
           raw: null,
@@ -180,7 +180,7 @@ describe("ACP runtime tool selection", () => {
         undefined,
         {
           cwd,
-          modelRegistry: { getAvailable: () => [] },
+          modelRuntime: { getAvailableSnapshot: () => [], getModel: () => undefined },
           model: undefined,
           hasUI: false,
         },
@@ -267,7 +267,7 @@ describe("ACP runtime tool selection", () => {
       await createAcpAgentRuntime({
         cwd,
         agentDir,
-        modelRegistry: { getAvailable: () => [] } as any,
+        modelRuntime: { getAvailableSnapshot: () => [], getModel: () => undefined } as any,
         acpConnection: createMockConnection(),
         clientCapabilities: {
           raw: null,
@@ -292,7 +292,7 @@ describe("ACP runtime tool selection", () => {
         undefined,
         {
           cwd,
-          modelRegistry: { getAvailable: () => [] },
+          modelRuntime: { getAvailableSnapshot: () => [], getModel: () => undefined },
           model: undefined,
           hasUI: false,
         },
@@ -369,7 +369,7 @@ describe("ACP runtime tool selection", () => {
       await createAcpAgentRuntime({
         cwd,
         agentDir,
-        modelRegistry: { getAvailable: () => [] } as any,
+        modelRuntime: { getAvailableSnapshot: () => [], getModel: () => undefined } as any,
         acpConnection: createMockConnection(),
         clientCapabilities: {
           raw: null,
@@ -394,7 +394,7 @@ describe("ACP runtime tool selection", () => {
         undefined,
         {
           cwd,
-          modelRegistry: { getAvailable: () => [] },
+          modelRuntime: { getAvailableSnapshot: () => [], getModel: () => undefined },
           model: undefined,
           hasUI: false,
         },
@@ -427,7 +427,7 @@ describe("ACP runtime tool selection", () => {
 
     await createAcpAgentRuntime({
       cwd: "/workspace/project",
-      modelRegistry: { getAvailable: () => [] } as any,
+      modelRuntime: { getAvailableSnapshot: () => [], getModel: () => undefined } as any,
       acpConnection: createMockConnection(),
       clientCapabilities: {
         raw: null,
@@ -462,7 +462,7 @@ describe("ACP runtime tool selection", () => {
 
     await createAcpAgentRuntime({
       cwd: "/workspace/project",
-      modelRegistry: { getAvailable: () => [] } as any,
+      modelRuntime: { getAvailableSnapshot: () => [], getModel: () => undefined } as any,
       acpConnection: createMockConnection(),
       clientCapabilities: {
         raw: null,
@@ -507,7 +507,7 @@ describe("ACP runtime tool selection", () => {
 
     await createAcpAgentRuntime({
       cwd,
-      modelRegistry: { getAvailable: () => [] } as any,
+      modelRuntime: { getAvailableSnapshot: () => [], getModel: () => undefined } as any,
       acpConnection: connection,
       clientCapabilities: {
         raw: null,

@@ -25,7 +25,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   SessionManager,
   type AgentSession,
-  type ModelRegistry,
+  type ModelRuntime,
   type SlashCommandInfo,
 } from "@earendil-works/pi-coding-agent";
 
@@ -67,10 +67,16 @@ import { ACP_AGENT_NAME, ACP_AGENT_TITLE, ADAPTER_VERSION } from "../packageMeta
 const PROTOCOL_VERSION = 1;
 
 export interface AcpAdapterConfig {
-  modelRegistry: ModelRegistry;
+  modelRuntime: ModelRuntime;
   defaultCwd?: string;
   agentDir?: string;
   defaultThinkingLevel?: ThinkingLevel;
+  /**
+   * Recreate the ModelRuntime (e.g. to reload auth.json written by another
+   * process). When present, authenticate() replaces config.modelRuntime with
+   * the returned runtime instead of refreshing the existing one.
+   */
+  reloadModelRuntime?: () => Promise<ModelRuntime>;
 }
 
 export class AcpAgent implements Agent {
@@ -129,7 +135,7 @@ export class AcpAgent implements Agent {
           resume: {},
         },
       },
-      authMethods: buildTerminalAuthMethods(this.config.modelRegistry.authStorage),
+      authMethods: buildTerminalAuthMethods(this.config.modelRuntime),
     };
   }
 
@@ -276,7 +282,7 @@ export class AcpAgent implements Agent {
       throw new Error(`Session ${params.sessionId} not found`);
     }
 
-    const availableModels = getAvailableModels(this.config.modelRegistry);
+    const availableModels = getAvailableModels(this.config.modelRuntime);
     const result = await handleSetSessionConfigOption(params, sessionState, availableModels);
 
     if (!result.applied) {
@@ -305,10 +311,18 @@ export class AcpAgent implements Agent {
       throw new Error(`Unknown ACP auth method: ${params.methodId}`);
     }
 
-    this.config.modelRegistry.authStorage.reload();
-    this.config.modelRegistry.refresh();
+    // Terminal auth runs in another process; ModelRuntime's default credential
+    // store snapshots auth.json at create() time. When a reload callback is
+    // configured, rebuild the runtime so future sessions see the new
+    // credentials; otherwise refresh the existing runtime in place.
+    if (this.config.reloadModelRuntime) {
+      this.config.modelRuntime = await this.config.reloadModelRuntime();
+    } else {
+      await this.config.modelRuntime.refresh({ allowNetwork: false });
+    }
 
-    if (!this.config.modelRegistry.authStorage.hasAuth(providerId)) {
+    const auth = await this.config.modelRuntime.checkAuth(providerId);
+    if (!auth) {
       throw new Error(
         `Authentication for provider ${JSON.stringify(providerId)} is not configured. Complete the terminal auth flow and try again.`,
       );
@@ -352,7 +366,7 @@ export class AcpAgent implements Agent {
   private getConfigOptions(sessionState: AcpSessionState) {
     return getSessionConfigOptions(
       sessionState,
-      this.config.modelRegistry,
+      this.config.modelRuntime,
       this.clientCapabilities.clientInfo,
     );
   }
@@ -387,7 +401,7 @@ export class AcpAgent implements Agent {
       cwd: options.cwd,
       agentDir: this.config.agentDir,
       additionalDirectories: options.additionalDirectories,
-      modelRegistry: this.config.modelRegistry,
+      modelRuntime: this.config.modelRuntime,
       acpConnection: this.connection,
       clientCapabilities: this.clientCapabilities,
       sessionManager: options.sessionManager,
@@ -468,7 +482,7 @@ export class AcpAgent implements Agent {
     return refreshConfigOptionsForSession(
       this.connection,
       sessionState,
-      this.config.modelRegistry,
+      this.config.modelRuntime,
       this.clientCapabilities.clientInfo,
       force,
     );

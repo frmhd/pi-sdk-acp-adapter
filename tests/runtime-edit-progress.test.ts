@@ -54,7 +54,7 @@ describe("ACP runtime edit progress", () => {
     await createAcpAgentRuntime({
       cwd: "/workspace/project",
       additionalDirectories: ["/workspace/shared"],
-      modelRegistry: { getAvailable: () => [] } as any,
+      modelRuntime: { getAvailableSnapshot: () => [], getModel: () => undefined } as any,
       acpConnection: connection,
       clientCapabilities: {
         raw: null,

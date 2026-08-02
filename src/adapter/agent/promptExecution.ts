@@ -97,7 +97,7 @@ export async function executePrompt(options: {
       return { stopReason: "end_turn" };
     }
 
-    const title = await generateSessionTitleFromMessages(userMessages, session.modelRegistry);
+    const title = await generateSessionTitleFromMessages(userMessages, session.modelRuntime);
     if (title) {
       session.setSessionName(title);
       await options.refreshSessionMetadata(options.sessionState, true).catch((error) => {
@@ -258,7 +258,7 @@ export async function executePrompt(options: {
       // Swallow failures here so that a model/auth error does not disrupt
       // the user's primary prompt workflow.
       try {
-        const title = await generateSessionTitle(userText, session.modelRegistry);
+        const title = await generateSessionTitle(userText, session.modelRuntime);
         if (title && options.sessionState.session) {
           options.sessionState.session.setSessionName(title);
           await options.refreshSessionMetadata(options.sessionState, true).catch((error) => {

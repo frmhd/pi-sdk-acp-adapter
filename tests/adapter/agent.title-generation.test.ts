@@ -6,21 +6,20 @@ import {
   createTestAgent,
 } from "../helpers/testDoubles.ts";
 
-vi.mock("@earendil-works/pi-ai", async (importOriginal) => {
-  const actual = (await importOriginal()) as typeof import("@earendil-works/pi-ai");
-  return {
-    ...actual,
-    completeSimple: vi.fn(),
-    getEnvApiKey: vi.fn(),
-  };
-});
-
-import { completeSimple, getEnvApiKey } from "@earendil-works/pi-ai";
 import {
   generateSessionTitle,
   generateSessionTitleFromMessages,
   getSmallModelSpec,
 } from "../../src/adapter/agent/titleGeneration.js";
+
+function createMockModelRuntime(overrides: Partial<any> = {}) {
+  return {
+    getModel: vi.fn(() => ({ id: "test-model", provider: "test-provider" })),
+    checkAuth: vi.fn(async () => ({ type: "api_key", source: "test" })),
+    completeSimple: vi.fn(),
+    ...overrides,
+  } as any;
+}
 
 describe("getSmallModelSpec", () => {
   const originalEnv = process.env;
@@ -74,73 +73,53 @@ describe("generateSessionTitle", () => {
   beforeEach(() => {
     process.env = { ...originalEnv };
     vi.resetAllMocks();
-    vi.mocked(getEnvApiKey).mockReturnValue(undefined);
   });
 
   afterEach(() => {
     process.env = originalEnv;
   });
 
-  function createMockModelRegistry(overrides: Partial<any> = {}) {
-    return {
-      find: vi.fn(() => ({ id: "test-model", provider: "test-provider" })),
-      hasConfiguredAuth: vi.fn(() => true),
-      getApiKeyAndHeaders: vi.fn(() => Promise.resolve({ ok: true, apiKey: "test-key" })),
-      ...overrides,
-    } as any;
-  }
-
   test("returns null when env var is not set", async () => {
     delete process.env.PI_ACP_SMALL_MODEL;
-    const registry = createMockModelRegistry();
-    const title = await generateSessionTitle("Hello world", registry);
+    const runtime = createMockModelRuntime();
+    const title = await generateSessionTitle("Hello world", runtime);
     expect(title).toBeNull();
-    expect(completeSimple).not.toHaveBeenCalled();
+    expect(runtime.completeSimple).not.toHaveBeenCalled();
   });
 
   test("returns null when model is not found", async () => {
     process.env.PI_ACP_SMALL_MODEL = "unknown/model";
-    const registry = createMockModelRegistry({ find: vi.fn(() => undefined) });
-    const title = await generateSessionTitle("Hello world", registry);
+    const runtime = createMockModelRuntime({ getModel: vi.fn(() => undefined) });
+    const title = await generateSessionTitle("Hello world", runtime);
     expect(title).toBeNull();
-    expect(completeSimple).not.toHaveBeenCalled();
+    expect(runtime.completeSimple).not.toHaveBeenCalled();
   });
 
   test("returns null when auth is not configured", async () => {
     process.env.PI_ACP_SMALL_MODEL = "test/model";
-    const registry = createMockModelRegistry({
-      hasConfiguredAuth: vi.fn(() => false),
+    const runtime = createMockModelRuntime({
+      checkAuth: vi.fn(async () => undefined),
     });
-    const title = await generateSessionTitle("Hello world", registry);
+    const title = await generateSessionTitle("Hello world", runtime);
     expect(title).toBeNull();
-    expect(completeSimple).not.toHaveBeenCalled();
-  });
-
-  test("returns null when auth lookup fails", async () => {
-    process.env.PI_ACP_SMALL_MODEL = "test/model";
-    const registry = createMockModelRegistry({
-      getApiKeyAndHeaders: vi.fn(() => Promise.resolve({ ok: false, error: "no key" })),
-    });
-    const title = await generateSessionTitle("Hello world", registry);
-    expect(title).toBeNull();
-    expect(completeSimple).not.toHaveBeenCalled();
+    expect(runtime.completeSimple).not.toHaveBeenCalled();
   });
 
   test("returns normalized title on success", async () => {
     process.env.PI_ACP_SMALL_MODEL = "test/model";
-    vi.mocked(completeSimple).mockResolvedValue({
-      content: [{ type: "text", text: "  Rust Binary Search Tree  " }],
-    } as any);
-
-    const registry = createMockModelRegistry();
+    const runtime = createMockModelRuntime({
+      completeSimple: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "  Rust Binary Search Tree  " }],
+      } as any),
+    });
     const title = await generateSessionTitle(
       "How do I implement a binary search tree in Rust?",
-      registry,
+      runtime,
     );
 
     expect(title).toBe("Rust Binary Search Tree");
-    expect(completeSimple).toHaveBeenCalledWith(
-      expect.anything(),
+    expect(runtime.completeSimple).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "test-model", provider: "test-provider" }),
       expect.objectContaining({
         systemPrompt: expect.stringContaining("concise, descriptive titles"),
         messages: expect.arrayContaining([
@@ -158,21 +137,21 @@ describe("generateSessionTitle", () => {
 
   test("returns null when response has no text content", async () => {
     process.env.PI_ACP_SMALL_MODEL = "test/model";
-    vi.mocked(completeSimple).mockResolvedValue({
-      content: [{ type: "thinking", thinking: "hmm" }],
-    } as any);
-
-    const registry = createMockModelRegistry();
-    const title = await generateSessionTitle("Hello", registry);
+    const runtime = createMockModelRuntime({
+      completeSimple: vi.fn().mockResolvedValue({
+        content: [{ type: "thinking", thinking: "hmm" }],
+      } as any),
+    });
+    const title = await generateSessionTitle("Hello", runtime);
     expect(title).toBeNull();
   });
 
   test("rejects on API error", async () => {
     process.env.PI_ACP_SMALL_MODEL = "test/model";
-    vi.mocked(completeSimple).mockRejectedValue(new Error("API error"));
-
-    const registry = createMockModelRegistry();
-    await expect(generateSessionTitle("Hello", registry)).rejects.toThrow("API error");
+    const runtime = createMockModelRuntime({
+      completeSimple: vi.fn().mockRejectedValue(new Error("API error")),
+    });
+    await expect(generateSessionTitle("Hello", runtime)).rejects.toThrow("API error");
   });
 });
 
@@ -182,43 +161,34 @@ describe("generateSessionTitleFromMessages", () => {
   beforeEach(() => {
     process.env = { ...originalEnv };
     vi.resetAllMocks();
-    vi.mocked(getEnvApiKey).mockReturnValue(undefined);
   });
 
   afterEach(() => {
     process.env = originalEnv;
   });
 
-  function createMockModelRegistry(overrides: Partial<any> = {}) {
-    return {
-      find: vi.fn(() => ({ id: "test-model", provider: "test-provider" })),
-      hasConfiguredAuth: vi.fn(() => true),
-      getApiKeyAndHeaders: vi.fn(() => Promise.resolve({ ok: true, apiKey: "test-key" })),
-      ...overrides,
-    } as any;
-  }
-
   test("returns null for empty message array", async () => {
     delete process.env.PI_ACP_SMALL_MODEL;
-    const registry = createMockModelRegistry();
-    const title = await generateSessionTitleFromMessages([], registry);
+    const runtime = createMockModelRuntime();
+    const title = await generateSessionTitleFromMessages([], runtime);
     expect(title).toBeNull();
   });
 
   test("combines user messages into prompt", async () => {
     process.env.PI_ACP_SMALL_MODEL = "test/model";
-    vi.mocked(completeSimple).mockResolvedValue({
-      content: [{ type: "text", text: "Project Setup" }],
-    } as any);
-
-    const registry = createMockModelRegistry();
+    const runtime = createMockModelRuntime({
+      completeSimple: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "Project Setup" }],
+      } as any),
+    });
     const title = await generateSessionTitleFromMessages(
       ["How do I set up React?", "Also TypeScript"],
-      registry,
+      runtime,
     );
 
     expect(title).toBe("Project Setup");
-    const content = vi.mocked(completeSimple).mock.calls[0]?.[1]?.messages?.[0]?.content as string;
+    const content = vi.mocked(runtime.completeSimple).mock.calls[0]?.[1]?.messages?.[0]
+      ?.content as string;
     expect(content).toContain("Message 1:");
     expect(content).toContain("How do I set up React?");
     expect(content).toContain("Message 2:");
@@ -227,30 +197,32 @@ describe("generateSessionTitleFromMessages", () => {
 
   test("truncates combined text to ~4000 characters", async () => {
     process.env.PI_ACP_SMALL_MODEL = "test/model";
-    vi.mocked(completeSimple).mockResolvedValue({
-      content: [{ type: "text", text: "Long Topic" }],
-    } as any);
-
-    const registry = createMockModelRegistry();
+    const runtime = createMockModelRuntime({
+      completeSimple: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "Long Topic" }],
+      } as any),
+    });
     const longMessage = "a".repeat(3000);
-    await generateSessionTitleFromMessages([longMessage, longMessage], registry);
+    await generateSessionTitleFromMessages([longMessage, longMessage], runtime);
 
-    const content = vi.mocked(completeSimple).mock.calls[0]?.[1]?.messages?.[0]?.content as string;
+    const content = vi.mocked(runtime.completeSimple).mock.calls[0]?.[1]?.messages?.[0]
+      ?.content as string;
     expect(content.length).toBeLessThanOrEqual(4010);
     expect(content).toContain("[...]");
   });
 
   test("uses only the most recent 20 messages", async () => {
     process.env.PI_ACP_SMALL_MODEL = "test/model";
-    vi.mocked(completeSimple).mockResolvedValue({
-      content: [{ type: "text", text: "Recent Topic" }],
-    } as any);
-
-    const registry = createMockModelRegistry();
+    const runtime = createMockModelRuntime({
+      completeSimple: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "Recent Topic" }],
+      } as any),
+    });
     const messages = Array.from({ length: 25 }, (_, i) => `User content ${i + 1}`);
-    await generateSessionTitleFromMessages(messages, registry);
+    await generateSessionTitleFromMessages(messages, runtime);
 
-    const content = vi.mocked(completeSimple).mock.calls[0]?.[1]?.messages?.[0]?.content as string;
+    const content = vi.mocked(runtime.completeSimple).mock.calls[0]?.[1]?.messages?.[0]
+      ?.content as string;
     const messageCount = (content.match(/Message \d+:/g) || []).length;
     expect(messageCount).toBe(20);
     expect(content).toContain("User content 21");
@@ -261,10 +233,10 @@ describe("generateSessionTitleFromMessages", () => {
 
   test("rejects on API error", async () => {
     process.env.PI_ACP_SMALL_MODEL = "test/model";
-    vi.mocked(completeSimple).mockRejectedValue(new Error("Model overloaded"));
-
-    const registry = createMockModelRegistry();
-    await expect(generateSessionTitleFromMessages(["Hello"], registry)).rejects.toThrow(
+    const runtime = createMockModelRuntime({
+      completeSimple: vi.fn().mockRejectedValue(new Error("Model overloaded")),
+    });
+    await expect(generateSessionTitleFromMessages(["Hello"], runtime)).rejects.toThrow(
       "Model overloaded",
     );
   });
@@ -299,15 +271,13 @@ describe("AcpAgent prompt title generation integration", () => {
       mockSession.sessionManager.getSessionName = vi.fn(() => name);
     });
 
-    mockSession.modelRegistry = {
-      find: vi.fn(() => ({ id: "tiny-model", provider: "test" })),
-      hasConfiguredAuth: vi.fn(() => true),
-      getApiKeyAndHeaders: vi.fn(() => Promise.resolve({ ok: true, apiKey: "key" })),
+    mockSession.modelRuntime = {
+      getModel: vi.fn(() => ({ id: "tiny-model", provider: "test" })),
+      checkAuth: vi.fn(async () => ({ type: "api_key", source: "test" })),
+      completeSimple: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "Array Sorting Guide" }],
+      } as any),
     };
-
-    vi.mocked(completeSimple).mockResolvedValue({
-      content: [{ type: "text", text: "Array Sorting Guide" }],
-    } as any);
 
     const createRuntime = vi.fn(async () => ({
       session: mockSession,
@@ -379,7 +349,7 @@ describe("AcpAgent prompt title generation integration", () => {
 
     await flushAsync();
 
-    expect(completeSimple).not.toHaveBeenCalled();
+    expect(mockSession.modelRuntime.completeSimple).not.toHaveBeenCalled();
     expect(mockSession.setSessionName).not.toHaveBeenCalled();
   });
 
@@ -417,7 +387,7 @@ describe("AcpAgent prompt title generation integration", () => {
 
     await flushAsync();
 
-    expect(completeSimple).not.toHaveBeenCalled();
+    expect(mockSession.modelRuntime.completeSimple).not.toHaveBeenCalled();
     expect(mockSession.setSessionName).not.toHaveBeenCalled();
   });
 
@@ -455,7 +425,7 @@ describe("AcpAgent prompt title generation integration", () => {
 
     await flushAsync();
 
-    expect(completeSimple).not.toHaveBeenCalled();
+    expect(mockSession.modelRuntime.completeSimple).not.toHaveBeenCalled();
     expect(mockSession.setSessionName).not.toHaveBeenCalled();
   });
 });
@@ -490,15 +460,13 @@ describe("AcpAgent /regenerate-title slash command", () => {
       { role: "user", content: "And Tailwind CSS too." },
     ];
 
-    mockSession.modelRegistry = {
-      find: vi.fn(() => ({ id: "tiny-model", provider: "test" })),
-      hasConfiguredAuth: vi.fn(() => true),
-      getApiKeyAndHeaders: vi.fn(() => Promise.resolve({ ok: true, apiKey: "key" })),
+    mockSession.modelRuntime = {
+      getModel: vi.fn(() => ({ id: "tiny-model", provider: "test" })),
+      checkAuth: vi.fn(async () => ({ type: "api_key", source: "test" })),
+      completeSimple: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "React Project Setup" }],
+      } as any),
     };
-
-    vi.mocked(completeSimple).mockResolvedValue({
-      content: [{ type: "text", text: "React Project Setup" }],
-    } as any);
 
     const createRuntime = vi.fn(async () => ({
       session: mockSession,
@@ -521,8 +489,8 @@ describe("AcpAgent /regenerate-title slash command", () => {
 
     expect(response.stopReason).toBe("end_turn");
     expect(mockSession.prompt).not.toHaveBeenCalled();
-    expect(completeSimple).toHaveBeenCalledWith(
-      expect.anything(),
+    expect(mockSession.modelRuntime.completeSimple).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "tiny-model", provider: "test" }),
       expect.objectContaining({
         messages: expect.arrayContaining([
           expect.objectContaining({
@@ -534,8 +502,8 @@ describe("AcpAgent /regenerate-title slash command", () => {
       expect.anything(),
     );
 
-    const callContent = vi.mocked(completeSimple).mock.calls[0]?.[1]?.messages?.[0]
-      ?.content as string;
+    const callContent = vi.mocked(mockSession.modelRuntime.completeSimple).mock.calls[0]?.[1]
+      ?.messages?.[0]?.content as string;
     expect(callContent).toContain("How do I set up a React project?");
     expect(callContent).toContain("Also need TypeScript support.");
     expect(callContent).toContain("And Tailwind CSS too.");
@@ -562,15 +530,13 @@ describe("AcpAgent /regenerate-title slash command", () => {
 
     mockSession.state.messages = [{ role: "user", content: "New topic about databases" }];
 
-    mockSession.modelRegistry = {
-      find: vi.fn(() => ({ id: "tiny-model", provider: "test" })),
-      hasConfiguredAuth: vi.fn(() => true),
-      getApiKeyAndHeaders: vi.fn(() => Promise.resolve({ ok: true, apiKey: "key" })),
+    mockSession.modelRuntime = {
+      getModel: vi.fn(() => ({ id: "tiny-model", provider: "test" })),
+      checkAuth: vi.fn(async () => ({ type: "api_key", source: "test" })),
+      completeSimple: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "Database Discussion" }],
+      } as any),
     };
-
-    vi.mocked(completeSimple).mockResolvedValue({
-      content: [{ type: "text", text: "Database Discussion" }],
-    } as any);
 
     const createRuntime = vi.fn(async () => ({
       session: mockSession,
@@ -625,7 +591,7 @@ describe("AcpAgent /regenerate-title slash command", () => {
     } as any);
 
     expect(response.stopReason).toBe("end_turn");
-    expect(completeSimple).not.toHaveBeenCalled();
+    expect(mockSession.modelRuntime.completeSimple).not.toHaveBeenCalled();
     expect(mockSession.setSessionName).not.toHaveBeenCalled();
   });
 
@@ -662,7 +628,7 @@ describe("AcpAgent /regenerate-title slash command", () => {
     } as any);
 
     expect(response.stopReason).toBe("end_turn");
-    expect(completeSimple).not.toHaveBeenCalled();
+    expect(mockSession.modelRuntime.completeSimple).not.toHaveBeenCalled();
     expect(mockSession.setSessionName).not.toHaveBeenCalled();
   });
 
@@ -676,13 +642,11 @@ describe("AcpAgent /regenerate-title slash command", () => {
 
     mockSession.state.messages = [{ role: "user", content: "Some question" }];
 
-    mockSession.modelRegistry = {
-      find: vi.fn(() => ({ id: "tiny-model", provider: "test" })),
-      hasConfiguredAuth: vi.fn(() => true),
-      getApiKeyAndHeaders: vi.fn(() => Promise.resolve({ ok: true, apiKey: "key" })),
+    mockSession.modelRuntime = {
+      getModel: vi.fn(() => ({ id: "tiny-model", provider: "test" })),
+      checkAuth: vi.fn(async () => ({ type: "api_key", source: "test" })),
+      completeSimple: vi.fn().mockRejectedValue(new Error("Model overloaded")),
     };
-
-    vi.mocked(completeSimple).mockRejectedValue(new Error("Model overloaded"));
 
     const createRuntime = vi.fn(async () => ({
       session: mockSession,
@@ -716,15 +680,13 @@ describe("AcpAgent /regenerate-title slash command", () => {
 
     mockSession.state.messages = [{ role: "user", content: "How do I sort an array?" }];
 
-    mockSession.modelRegistry = {
-      find: vi.fn(() => ({ id: "tiny-model", provider: "test" })),
-      hasConfiguredAuth: vi.fn(() => true),
-      getApiKeyAndHeaders: vi.fn(() => Promise.resolve({ ok: true, apiKey: "key" })),
+    mockSession.modelRuntime = {
+      getModel: vi.fn(() => ({ id: "tiny-model", provider: "test" })),
+      checkAuth: vi.fn(async () => ({ type: "api_key", source: "test" })),
+      completeSimple: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "Array Sorting" }],
+      } as any),
     };
-
-    vi.mocked(completeSimple).mockResolvedValue({
-      content: [{ type: "text", text: "Array Sorting" }],
-    } as any);
 
     const createRuntime = vi.fn(async () => ({
       session: mockSession,

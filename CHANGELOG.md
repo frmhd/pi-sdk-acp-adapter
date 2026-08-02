@@ -8,7 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- Updated `@agentclientprotocol/sdk` to 0.28.1 and `@earendil-works/pi-*` packages to 0.79.8.
+- Updated `@agentclientprotocol/sdk` to 1.3.0 and `@earendil-works/pi-*` packages to 0.83.0.
+- Migrated the adapter from the deprecated `ModelRegistry` facade to the canonical `ModelRuntime` (`ModelRuntime.create()` in the CLI, `modelRuntime` in `AcpAdapterConfig`/`CreateAcpAgentRuntimeOptions`, `session.modelRuntime` for title generation). Session titles now use `ModelRuntime.completeSimple` with `checkAuth`-gated auth; terminal OAuth runs against `ModelRuntime` providers and `login(providerId, "oauth", { prompt, notify })`, with per-prompt `AbortSignal` support.
+- `authenticate()` now refreshes/reloads the `ModelRuntime` (via the new optional `reloadModelRuntime` config callback, used by the CLI to re-read `auth.json` written by the terminal auth process) and validates auth with `checkAuth(providerId)`.
+- Added `max` to the advertised thinking levels.
 - Removed the `@earendil-works/pi-ai` DeepSeek reasoning replay patch; upstream provider fixes make it unnecessary.
 - Advertise stable `additionalDirectories` session capability and include active session roots in `session/list` responses.
 - Terminal OAuth login now supports device-code and login-method selection callbacks required by Pi 0.77.

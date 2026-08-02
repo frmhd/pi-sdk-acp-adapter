@@ -74,7 +74,7 @@ describe("ACP runtime read fallback", () => {
     await createAcpAgentRuntime({
       cwd,
       additionalDirectories: [shared],
-      modelRegistry: { getAvailable: () => [] } as any,
+      modelRuntime: { getAvailableSnapshot: () => [], getModel: () => undefined } as any,
       acpConnection: connection,
       clientCapabilities: {
         raw: null,

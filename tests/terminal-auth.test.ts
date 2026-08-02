@@ -30,6 +30,16 @@ function createMockRuntime() {
   });
 }
 
+function createMockModelRuntime(overrides: any = {}) {
+  return {
+    getProviders: () => [{ id: "anthropic", name: "Anthropic", auth: { oauth: {} } }],
+    getAvailableSnapshot: () => [],
+    refresh: vi.fn(async () => ({ aborted: false, errors: new Map() })),
+    checkAuth: vi.fn(async () => undefined),
+    ...overrides,
+  } as any;
+}
+
 describe("terminal auth helpers", () => {
   test("parses terminal auth cli args from separate flag and provider", () => {
     expect(parseTerminalAuthCliArgs([ACP_TERMINAL_AUTH_FLAG, "anthropic"])).toEqual({
@@ -52,12 +62,13 @@ describe("terminal auth helpers", () => {
     expect(getProviderIdFromTerminalAuthMethodId("agent")).toBeUndefined();
   });
 
-  test("builds ACP terminal auth methods with spec args and legacy zed meta", () => {
+  test("builds ACP terminal auth methods from oauth providers with spec args and legacy zed meta", () => {
     const methods = buildTerminalAuthMethods(
       {
-        getOAuthProviders: () => [
-          { id: "openai-codex", name: "OpenAI Codex" },
-          { id: "anthropic", name: "Anthropic" },
+        getProviders: () => [
+          { id: "openai-codex", name: "OpenAI Codex", auth: { oauth: {} } },
+          { id: "anthropic", name: "Anthropic", auth: { oauth: {} } },
+          { id: "api-key-only", name: "API Key Only", auth: { apiKey: {} } },
         ],
       } as any,
       {
@@ -86,19 +97,10 @@ describe("terminal auth helpers", () => {
 });
 
 describe("AcpAgent terminal auth", () => {
-  test("advertises terminal auth methods only when the client opts in", async () => {
-    const authStorage = {
-      getOAuthProviders: () => [{ id: "anthropic", name: "Anthropic" }],
-      reload: vi.fn(() => undefined),
-      hasAuth: vi.fn(() => false),
-    };
-    const modelRegistry = {
-      getAvailable: () => [],
-      refresh: vi.fn(() => undefined),
-      authStorage,
-    } as any;
+  test("advertises terminal auth methods for oauth providers", async () => {
+    const modelRuntime = createMockModelRuntime();
 
-    const agent = new AcpAgent(createMockConnection(), { modelRegistry }, createMockRuntime());
+    const agent = new AcpAgent(createMockConnection(), { modelRuntime }, createMockRuntime());
 
     const optedIn = await agent.initialize({
       protocolVersion: 1,
@@ -120,7 +122,7 @@ describe("AcpAgent terminal auth", () => {
 
     const agentWithoutOptIn = new AcpAgent(
       createMockConnection(),
-      { modelRegistry },
+      { modelRuntime },
       createMockRuntime(),
     );
 
@@ -143,18 +145,11 @@ describe("AcpAgent terminal auth", () => {
   });
 
   test("accepts authenticate after terminal auth writes credentials", async () => {
-    const authStorage = {
-      getOAuthProviders: () => [{ id: "anthropic", name: "Anthropic" }],
-      reload: vi.fn(() => undefined),
-      hasAuth: vi.fn(() => true),
-    };
-    const modelRegistry = {
-      getAvailable: () => [],
-      refresh: vi.fn(() => undefined),
-      authStorage,
-    } as any;
+    const modelRuntime = createMockModelRuntime({
+      checkAuth: vi.fn(async () => ({ type: "oauth", source: "OAuth" })),
+    });
 
-    const agent = new AcpAgent(createMockConnection(), { modelRegistry }, createMockRuntime());
+    const agent = new AcpAgent(createMockConnection(), { modelRuntime }, createMockRuntime());
     await agent.initialize({
       protocolVersion: 1,
       clientCapabilities: {
@@ -168,24 +163,44 @@ describe("AcpAgent terminal auth", () => {
       agent.authenticate({ methodId: buildTerminalAuthMethodId("anthropic") } as any),
     ).resolves.toEqual({});
 
-    expect(authStorage.reload).toHaveBeenCalledTimes(1);
-    expect(authStorage.hasAuth).toHaveBeenCalledWith("anthropic");
-    expect(modelRegistry.refresh).toHaveBeenCalledTimes(1);
+    expect(modelRuntime.refresh).toHaveBeenCalledTimes(1);
+    expect(modelRuntime.checkAuth).toHaveBeenCalledWith("anthropic");
+  });
+
+  test("reloads the model runtime via callback when configured", async () => {
+    const initialRuntime = createMockModelRuntime();
+    const reloadedRuntime = createMockModelRuntime({
+      checkAuth: vi.fn(async () => ({ type: "oauth", source: "OAuth" })),
+    });
+    const reloadModelRuntime = vi.fn(async () => reloadedRuntime);
+
+    const agent = new AcpAgent(
+      createMockConnection(),
+      { modelRuntime: initialRuntime, reloadModelRuntime },
+      createMockRuntime(),
+    );
+    await agent.initialize({
+      protocolVersion: 1,
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: true,
+        auth: { terminal: true },
+      },
+    });
+
+    await expect(
+      agent.authenticate({ methodId: buildTerminalAuthMethodId("anthropic") } as any),
+    ).resolves.toEqual({});
+
+    expect(reloadModelRuntime).toHaveBeenCalledTimes(1);
+    expect(initialRuntime.refresh).not.toHaveBeenCalled();
+    expect(reloadedRuntime.checkAuth).toHaveBeenCalledWith("anthropic");
   });
 
   test("rejects authenticate when the terminal auth flow did not persist credentials", async () => {
-    const authStorage = {
-      getOAuthProviders: () => [{ id: "anthropic", name: "Anthropic" }],
-      reload: vi.fn(() => undefined),
-      hasAuth: vi.fn(() => false),
-    };
-    const modelRegistry = {
-      getAvailable: () => [],
-      refresh: vi.fn(() => undefined),
-      authStorage,
-    } as any;
+    const modelRuntime = createMockModelRuntime();
 
-    const agent = new AcpAgent(createMockConnection(), { modelRegistry }, createMockRuntime());
+    const agent = new AcpAgent(createMockConnection(), { modelRuntime }, createMockRuntime());
     await agent.initialize({
       protocolVersion: 1,
       clientCapabilities: {

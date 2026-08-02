@@ -3,7 +3,7 @@ import {
   createAgentSession,
   type AgentSession,
   type CreateAgentSessionOptions,
-  type ModelRegistry,
+  type ModelRuntime,
   type SessionManager,
   type SlashCommandInfo,
 } from "@earendil-works/pi-coding-agent";
@@ -17,7 +17,7 @@ export interface CreateAcpAgentRuntimeOptions {
   cwd: string;
   agentDir?: string;
   additionalDirectories?: string[];
-  modelRegistry: ModelRegistry;
+  modelRuntime: ModelRuntime;
   acpConnection: AcpAgentClientContext;
   clientCapabilities: AcpClientCapabilitiesSnapshot;
   sessionManager: SessionManager;
@@ -41,7 +41,7 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
     cwd: options.cwd,
     additionalDirectories: options.additionalDirectories ?? [],
     agentDir: options.agentDir,
-    modelRegistry: options.modelRegistry,
+    modelRuntime: options.modelRuntime,
     acpClient,
     clientCapabilities: options.clientCapabilities,
     onToolCallStateCaptured: options.onToolCallStateCaptured,
@@ -54,7 +54,7 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
   const sessionOptions: CreateAgentSessionOptions = {
     cwd: options.cwd,
     agentDir: options.agentDir,
-    modelRegistry: options.modelRegistry,
+    modelRuntime: options.modelRuntime,
     thinkingLevel: options.thinkingLevel || "medium",
     customTools: tools,
     sessionManager: options.sessionManager,

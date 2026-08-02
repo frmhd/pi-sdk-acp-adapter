@@ -1,6 +1,6 @@
 import type { Implementation } from "@agentclientprotocol/sdk";
 import type { AcpAgentClientContext } from "../acpClientContext.js";
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 import type { AcpSessionState } from "../types.js";
 import {
@@ -21,12 +21,12 @@ import { buildSessionUsageSnapshot } from "./usage.js";
 
 export function getSessionConfigOptions(
   sessionState: AcpSessionState,
-  modelRegistry: ModelRegistry,
+  modelRuntime: ModelRuntime,
   clientInfo?: Implementation | null,
 ) {
   const configOptions = getCurrentConfigOptions(
     sessionState,
-    getAvailableModels(modelRegistry),
+    getAvailableModels(modelRuntime),
     clientInfo,
   );
   sessionState.lastConfigOptions = configOptions;
@@ -85,13 +85,13 @@ export async function refreshSessionUsage(
 export async function refreshConfigOptions(
   connection: AcpAgentClientContext,
   sessionState: AcpSessionState,
-  modelRegistry: ModelRegistry,
+  modelRuntime: ModelRuntime,
   clientInfo?: Implementation | null,
   force = false,
 ): Promise<void> {
   const configOptions = getCurrentConfigOptions(
     sessionState,
-    getAvailableModels(modelRegistry),
+    getAvailableModels(modelRuntime),
     clientInfo,
   );
 
