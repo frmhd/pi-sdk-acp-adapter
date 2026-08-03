@@ -11,7 +11,6 @@ export interface AcpSessionTools {
   writeTool: AcpSessionTool;
   editTool: AcpSessionTool;
   bashTool: AcpSessionTool;
-  subagentTool: AcpSessionTool;
 }
 
 export interface MutationToolTracking {

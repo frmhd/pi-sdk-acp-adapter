@@ -13,7 +13,7 @@ let cachedPreferences: ModelPreferences | null = null;
 let writeLock: Promise<void> = Promise.resolve();
 let writeDisabled = false;
 
-export function isValidThinkingLevel(value: string | undefined): value is ThinkingLevel {
+function isValidThinkingLevel(value: string | undefined): value is ThinkingLevel {
   return !!value && ALL_THINKING_LEVELS.includes(value as ThinkingLevel);
 }
 

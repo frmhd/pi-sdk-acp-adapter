@@ -37,17 +37,15 @@ export async function createAcpAgentRuntime(options: CreateAcpAgentRuntimeOption
     options.clientCapabilities,
   );
 
-  const { readTool, writeTool, editTool, bashTool, subagentTool } = buildAcpSessionTools({
+  const { readTool, writeTool, editTool, bashTool } = buildAcpSessionTools({
     cwd: options.cwd,
     additionalDirectories: options.additionalDirectories ?? [],
-    agentDir: options.agentDir,
-    modelRuntime: options.modelRuntime,
     acpClient,
     clientCapabilities: options.clientCapabilities,
     onToolCallStateCaptured: options.onToolCallStateCaptured,
   });
 
-  const tools = [readTool, writeTool, editTool, bashTool, subagentTool] as unknown as NonNullable<
+  const tools = [readTool, writeTool, editTool, bashTool] as unknown as NonNullable<
     CreateAgentSessionOptions["customTools"]
   >;
 

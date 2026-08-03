@@ -1,8 +1,6 @@
 import {
   createReadToolDefinition,
-  type CreateAgentSessionOptions,
   type EditOperations,
-  type ModelRuntime,
   type ReadOperations,
   type WriteOperations,
 } from "@earendil-works/pi-coding-agent";
@@ -25,21 +23,16 @@ import {
 import { wrapBashForAcp } from "./wrapBashTool.js";
 import { wrapEditForAcp } from "./wrapEditTool.js";
 import { wrapWriteForAcp } from "./wrapWriteTool.js";
-import { createSubagentTool } from "./wrapSubagentTool.js";
 
 export interface BuildAcpSessionToolsOptions {
   cwd: string;
   additionalDirectories: string[];
-  agentDir?: string;
-  modelRuntime: ModelRuntime;
   acpClient: AcpClientInterface;
   clientCapabilities: AcpClientCapabilitiesSnapshot;
   onToolCallStateCaptured?: (toolCallId: string, update: Partial<AcpToolCallState>) => void;
 }
 
-function buildCoreAcpSessionTools(
-  options: BuildAcpSessionToolsOptions,
-): Pick<AcpSessionTools, "readTool" | "writeTool" | "editTool" | "bashTool"> {
+export function buildAcpSessionTools(options: BuildAcpSessionToolsOptions): AcpSessionTools {
   const authorizedRoots = getAuthorizedRoots(options.cwd, options.additionalDirectories);
   const acpReadRoots = getAuthorizedRoots(options.cwd);
   const tracking = createMutationToolTracking();
@@ -115,37 +108,5 @@ function buildCoreAcpSessionTools(
     writeTool,
     editTool,
     bashTool,
-  };
-}
-
-export function buildAcpSessionTools(options: BuildAcpSessionToolsOptions): AcpSessionTools {
-  const coreTools = buildCoreAcpSessionTools(options);
-  const createChildCustomTools = (
-    cwd: string,
-  ): NonNullable<CreateAgentSessionOptions["customTools"]> => {
-    const childCoreTools = buildCoreAcpSessionTools({
-      ...options,
-      cwd,
-      onToolCallStateCaptured: undefined,
-    });
-
-    return [
-      childCoreTools.readTool,
-      childCoreTools.writeTool,
-      childCoreTools.editTool,
-      childCoreTools.bashTool,
-    ] as unknown as NonNullable<CreateAgentSessionOptions["customTools"]>;
-  };
-
-  const subagentTool = createSubagentTool({
-    cwd: options.cwd,
-    agentDir: options.agentDir,
-    modelRuntime: options.modelRuntime,
-    createChildCustomTools,
-  });
-
-  return {
-    ...coreTools,
-    subagentTool,
   };
 }
