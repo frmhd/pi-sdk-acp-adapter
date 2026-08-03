@@ -402,7 +402,7 @@ if (dryRun) {
   }
 } else {
   if (releaseType) {
-    run(`npx bumpp --release ${releaseType} --no-push`, { stdio: "inherit" });
+    run(`npx bumpp --release ${releaseType} --no-push --yes`, { stdio: "inherit" });
   } else {
     run("npx bumpp --no-push", { stdio: "inherit" });
   }
@@ -415,6 +415,10 @@ if (dryRun) {
 const bumpedVersion = dryRun
   ? nextVersion || "<version>"
   : JSON.parse(readFileSync("package.json", "utf-8")).version;
+
+if (!dryRun && releaseType && bumpedVersion !== nextVersion) {
+  bail(`Version bump failed: expected ${nextVersion}, found ${bumpedVersion}.`);
+}
 
 if (!dryRun) {
   log(`\n📝 Versioning changelog header for v${bumpedVersion}…`);
