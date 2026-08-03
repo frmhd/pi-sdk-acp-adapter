@@ -11,8 +11,6 @@ This adapter connects the Pi Coding Agent to ACP-compatible clients such as Zed.
 
 The adapter observes Pi's tool lifecycle and maps it to ACP tool cards, file locations, edit/write diff cards, structured output, and plain-text shell output. It does not replace Pi's tools or alter prompts before execution.
 
-[pi-sdk-demo](https://github.com/user-attachments/assets/f6cc726e-2bc9-49c4-a9b4-6cc9488de629)
-
 ## Table of Contents
 
 - [Features](#features)
