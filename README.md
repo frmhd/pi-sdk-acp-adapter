@@ -4,7 +4,12 @@ An ACP (Agent Client Protocol) adapter for the [Pi Coding Agent](https://github.
 
 ## Overview
 
-This adapter connects the Pi Coding Agent to ACP-compatible clients such as Zed. Pi executes its own built-in `read`, `edit`, `write`, and `bash` tools directly — the adapter does not delegate filesystem or terminal operations to the client, and it applies no adapter-specific path authorization. The adapter's job is presentation: it maps Pi's tool lifecycle events into ACP tool cards, file locations, edit/write diff cards, structured output, and plain text bash output.
+This adapter connects the Pi Coding Agent to ACP-compatible clients such as Zed. Pi runs locally and executes its own tools; the ACP client displays their progress and results.
+
+> [!IMPORTANT]
+> Filesystem and shell operations are **intentionally not delegated to the ACP client**, aligning with the upcoming ACP v2's removal of client-delegated filesystem and terminal operations. Pi's native `read`, `edit`, `write`, and `bash` tools access the local environment of the adapter process directly. Client roots and `additionalDirectories` are session metadata, not an authorization boundary; configure permissions and sandboxing where Pi runs.
+
+The adapter observes Pi's tool lifecycle and maps it to ACP tool cards, file locations, edit/write diff cards, structured output, and plain-text shell output. It does not replace Pi's tools or alter prompts before execution.
 
 [pi-sdk-demo](https://github.com/user-attachments/assets/f6cc726e-2bc9-49c4-a9b4-6cc9488de629)
 
@@ -22,7 +27,7 @@ This adapter connects the Pi Coding Agent to ACP-compatible clients such as Zed.
 - **Native Pi Tool Execution**: Pi's own `read`, `edit`, `write`, and `bash` tools run unchanged, with Pi's file mutation queue, schemas, settings, and cancellation behavior intact.
 - **ACP Diff Cards**: Successful `edit`/`write` calls render as ACP diff cards in supported editors, including create/overwrite detection and first-changed-line navigation.
 - **Tool Presentation**: Every tool call is surfaced as an ACP tool card with a title, file locations, structured output, and plain text bash updates.
-- **Interactive Terminal Auth**: Exposes Pi's OAuth flows seamlessly within your IDE's terminal for seamless authentication.
+- **Interactive Authentication**: Uses the ACP client terminal only for Pi's OAuth login flow; agent shell commands still run through Pi's native `bash` tool.
 - **Context Window Tracking (Zed)**: Displays context usage and token counts in the Zed agent panel in a hacky way.
 - **Session Title Autogeneration**: Automatically generates concise session titles from the first user message when `PI_ACP_SMALL_MODEL` is configured with an authenticated model. Includes a `/regenerate-title` slash command to re-title a session from its conversation history.
 - **Agent Skills & Slash Commands**: Full support for Pi agent skills and slash commands (prompt templates), with working discovery and invocation. No extra adapter configuration is required — these work out of the box because Pi handles them natively.
@@ -32,7 +37,7 @@ This adapter connects the Pi Coding Agent to ACP-compatible clients such as Zed.
 
 Designed with a focus on [Zed](https://zed.dev) as the primary reference client, but built to strictly adhere to the ACP specification for broad compatibility.
 
-- **Zed** — Reference client. Full support for diffs, auth, and token tracking.
+- **Zed** — Reference client. Supports diff presentation, interactive authentication, and token tracking.
 - **WebStorm** — Supported.
 - **Obsidian** — Works seamlessly via the Agent Client plugin.
 - **Other ACP Clients** — Should work with any ACP-compliant client, but not explicitly tested.
@@ -99,7 +104,8 @@ Example configuration in Zed's `settings.json`:
 
 The adapter is a presentation/session layer over Pi's native runtime:
 
-- Pi creates and executes its built-in `read`, `edit`, `write`, and `bash` tools directly. The adapter never shadows them with same-name tools and never routes their operations to ACP client filesystem or terminal methods.
+- Pi creates and executes its built-in `read`, `edit`, `write`, and `bash` tools directly in the adapter process. The adapter never shadows them with same-name tools and never calls ACP client filesystem or terminal methods for agent operations.
+- The ACP terminal may be used for interactive OAuth authentication only; it is not the backend for Pi's `bash` tool.
 - An observation-only tracker chains Pi's public tool lifecycle hooks to capture the inputs, resolved paths, and before/after file snapshots needed for ACP presentation. Snapshot reads are display-only and never affect Pi execution.
 - `edit`/`write` calls render as ACP diff cards when display snapshots succeed; bash output is presented as ordinary ACP text/structured content.
 - Prompt text is passed to Pi unchanged. Path handling and any path/reference semantics are Pi's own — the adapter applies no path authorization.
