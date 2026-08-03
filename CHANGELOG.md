@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-08-03
+
+### Removed
+
+- **Breaking: removed ACP client filesystem and terminal delegation.** The adapter no longer routes Pi's `read`, `edit`, `write`, and `bash` tools through ACP client `fs/*` or `terminal/*` methods, and no longer applies adapter-owned path authorization. Pi now creates and executes its own built-in tools directly, with the adapter acting as an observation-only presentation layer (tool cards, locations, edit/write diff cards, structured output, and plain text bash output). Prompt text is passed to Pi unchanged (`@path` preprocessing removed). `additionalDirectories` remains session metadata but no longer gates Pi tools.
+- **Breaking: removed public capability/terminal helpers.** Removed `getMissingRequiredClientCapabilities()`, `createMissingClientCapabilitiesMessage()`, `createTerminalContent()`, the `AcpBashTerminalRawOutput` type, and the `supportsReadTextFile` / `supportsWriteTextFile` / `supportsTerminal` fields of `AcpClientCapabilitiesSnapshot` (terminal auth via `supportsTerminalAuth` and client identity via `clientInfo` are retained).
+- `CreateAcpAgentRuntimeOptions` no longer accepts `acpConnection`, `clientCapabilities`, `sessionId`, or `additionalDirectories`; `createAcpAgentRuntimeFactory()` no longer closes over an ACP client context.
+- Removed the `AcpToolBridge`, `AcpConnectionAdapter`, ACP/local/hybrid tool operation backends, terminal request helpers, and adapter pager environment overrides.
+
 ### Changed
 
 - Updated `@agentclientprotocol/sdk` to 1.3.0 and `@earendil-works/pi-*` packages to 0.83.0.
@@ -20,6 +29,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Removed
 
 - DeepSeek reasoning replay tests and the `pi-ai` pnpm patch.
+
+### Breaking Changes
+
+- Requires ACP SDK 1.3.0 and Pi 0.83.0, with runtime integrations migrated to `ModelRuntime` and `AcpAgentClientContext`.
+- ACP clients no longer handle filesystem or terminal operations; the adapter now observes Pi’s built-in tools.
+- Removed the adapter-provided subagent tool and the `usage` configuration option.
+
+### New Features
+
+- Advertises `additionalDirectories` support and includes additional directories in session listings.
+- Persists per-model thinking-level preferences across sessions.
+- Adds an agent skill for upgrading SDK dependencies.
+
+### Bug Fixes
+
+- Prompt failures are now returned gracefully as ACP message chunks.
+- Improved session refresh reliability by adding a short scheduling delay.
 
 ## [0.1.7] - 2026-04-29
 

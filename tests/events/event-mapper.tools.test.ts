@@ -85,19 +85,10 @@ describe("Tool Execution Update Mapping", () => {
     expect((notification.update as any).rawOutput).toEqual(partialResult);
   });
 
-  test("maps terminal-backed bash updates to ACP terminal content", () => {
-    const rawOutput = {
-      type: "acp_terminal",
-      terminalId: "term-123",
-      input: { command: "echo hi", timeout: null },
-      execution: {
-        command: "echo hi",
-        args: [],
-        cwd: "/workspace/project",
-        outputByteLimit: 51200,
-      },
-      output: "hi\n",
-      truncated: false,
+  test("maps bash updates to plain ACP text content", () => {
+    const partialResult = {
+      content: [{ type: "text", text: "hi\n" }],
+      details: { truncated: false },
     };
 
     const notification = mapToolExecutionUpdate(
@@ -105,14 +96,13 @@ describe("Tool Execution Update Mapping", () => {
       {
         toolCallId: "tool-1",
         toolName: "bash",
-        partialResult: { content: [], details: undefined },
+        partialResult,
       },
       {
         toolCallState: {
           toolName: "bash",
-          terminalId: "term-123",
           rawInput: { command: "echo hi" },
-          rawOutput,
+          rawOutput: partialResult,
         },
       },
     );
@@ -120,9 +110,15 @@ describe("Tool Execution Update Mapping", () => {
     expect((notification.update as any).status).toBe("in_progress");
     expect((notification.update as any).title).toBe("Run: echo hi");
     expect((notification.update as any).content).toEqual([
-      { type: "terminal", terminalId: "term-123" },
+      {
+        type: "content",
+        content: { type: "text", text: "hi\n" },
+      },
     ]);
-    expect((notification.update as any).rawOutput).toEqual(rawOutput);
+    expect((notification.update as any).rawOutput).toEqual(partialResult);
+    expect((notification.update as any).content).not.toEqual([
+      { type: "terminal", terminalId: expect.any(String) },
+    ]);
   });
 
   test("keeps notification shape when partial output has no visible content", () => {
@@ -303,21 +299,10 @@ describe("Tool Execution End Mapping", () => {
     expect((notification.update as any).rawOutput).toEqual(result);
   });
 
-  test("keeps bash completion terminal-backed and preserves raw terminal metadata", () => {
-    const rawOutput = {
-      type: "acp_terminal",
-      terminalId: "term-123",
-      input: { command: "echo hi", timeout: null },
-      execution: {
-        command: "echo hi",
-        args: [],
-        cwd: "/workspace/project",
-        outputByteLimit: 51200,
-      },
-      output: "hi\n",
-      truncated: false,
-      exitCode: 0,
-      signal: null,
+  test("keeps bash completion as plain structured Pi content", () => {
+    const result = {
+      content: [{ type: "text", text: "hi\n" }],
+      details: { truncated: false, exitCode: 0 },
     };
 
     const notification = mapToolExecutionEnd(
@@ -325,15 +310,14 @@ describe("Tool Execution End Mapping", () => {
       {
         toolCallId: "tool-4",
         toolName: "bash",
-        result: { content: [{ type: "text", text: "hi" }] },
+        result,
         isError: false,
       },
       {
         toolCallState: {
           toolName: "bash",
-          terminalId: "term-123",
           rawInput: { command: "echo hi" },
-          rawOutput,
+          rawOutput: result,
         },
       },
     );
@@ -342,9 +326,15 @@ describe("Tool Execution End Mapping", () => {
     expect((notification.update as any).kind).toBe("execute");
     expect((notification.update as any).title).toBe("Run: echo hi");
     expect((notification.update as any).content).toEqual([
-      { type: "terminal", terminalId: "term-123" },
+      {
+        type: "content",
+        content: { type: "text", text: "hi\n" },
+      },
     ]);
-    expect((notification.update as any).rawOutput).toEqual(rawOutput);
+    expect((notification.update as any).rawOutput).toEqual(result);
+    expect((notification.update as any).content).not.toEqual([
+      { type: "terminal", terminalId: expect.any(String) },
+    ]);
   });
 
   test("maps error result to failed status", () => {

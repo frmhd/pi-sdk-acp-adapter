@@ -21,7 +21,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { createAcpAgentApp } from "./adapter/acpAgentApp.js";
-import type { AcpAgentClientContext } from "./adapter/acpClientContext.js";
 import { createAcpAgentRuntime } from "./runtime/AcpAgentRuntime.js";
 import { ModelRuntime, getAgentDir, type AgentSession } from "@earendil-works/pi-coding-agent";
 import type { CreateAcpAgentRuntimeOptions } from "./runtime/AcpAgentRuntime.js";
@@ -123,18 +122,18 @@ async function createAdapterConfig(): Promise<{
  * Creates the runtime factory function required by AcpAgent.
  *
  * This factory is called for each new session to create a Pi AgentSession
- * configured with ACP tool delegation.
+ * with Pi's native tools. The adapter no longer configures ACP tool delegation,
+ * so the factory does not close over an ACP client context.
  */
-function createRuntimeFactory(acpConnection: AcpAgentClientContext, config: { agentDir: string }) {
+function createRuntimeFactory(config: { agentDir: string }) {
   return async (
-    options: Omit<CreateAcpAgentRuntimeOptions, "acpConnection" | "agentDir">,
+    options: Omit<CreateAcpAgentRuntimeOptions, "agentDir">,
   ): Promise<{
     session: AgentSession;
     dispose: () => void;
   }> => {
     return createAcpAgentRuntime({
       ...options,
-      acpConnection,
       agentDir: config.agentDir,
     });
   };
@@ -190,8 +189,7 @@ async function main(): Promise<void> {
         // rebuild the runtime so credentials are picked up on authenticate().
         reloadModelRuntime: () => ModelRuntime.create(),
       },
-      createRuntimeFactory: (clientContext) => (runtimeOptions) =>
-        createRuntimeFactory(clientContext, { agentDir: config.agentDir })(runtimeOptions),
+      createRuntimeFactory: () => createRuntimeFactory({ agentDir: config.agentDir }),
     });
 
     const connection = app.connect(stream);

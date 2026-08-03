@@ -3,17 +3,11 @@ import type { AcpAgentClientContext } from "../acpClientContext.js";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
 
-import type { AcpClientCapabilitiesSnapshot, AcpSessionState, AcpToolCallState } from "../types.js";
+import type { AcpSessionState, AcpToolCallState } from "../types.js";
 import { mapAgentEvent, mapStopReason } from "../AcpEventMapper.js";
-import { resolvePromptPathsInText } from "../resolvePromptPaths.js";
 
 import { extractContentFromBlocks } from "./promptContent.js";
-import {
-  extractFirstChangedLine,
-  getOrCreateToolCallState,
-  mergeCapturedRawOutput,
-  releaseToolCallResources,
-} from "./toolCallState.js";
+import { extractFirstChangedLine, getOrCreateToolCallState } from "./toolCallState.js";
 import { extractUserText } from "../session/sessionMetadata.js";
 import {
   generateSessionTitle,
@@ -53,7 +47,6 @@ export async function executePrompt(options: {
   connection: AcpAgentClientContext;
   request: PromptRequest;
   sessionState: AcpSessionState;
-  clientCapabilities: AcpClientCapabilitiesSnapshot;
   refreshSessionUsage: (sessionState: AcpSessionState, force?: boolean) => Promise<void>;
   refreshSessionMetadata: (sessionState: AcpSessionState, force?: boolean) => Promise<void>;
   refreshAvailableCommands: (sessionState: AcpSessionState, force?: boolean) => Promise<void>;
@@ -71,15 +64,8 @@ export async function executePrompt(options: {
     };
   }
 
-  const userText = await resolvePromptPathsInText({
-    text: rawUserText,
-    cwd: options.sessionState.cwd,
-    additionalDirectories: options.sessionState.additionalDirectories,
-    connection: options.connection,
-    sessionId: options.request.sessionId,
-    clientCapabilities: options.clientCapabilities,
-  });
-
+  // Pass prompt text to Pi unchanged. Path/reference semantics are Pi's own.
+  const userText = rawUserText;
   const trimmedText = userText.trim();
   if (trimmedText === "/regenerate-title") {
     // Skip if no small model is configured
@@ -139,11 +125,7 @@ export async function executePrompt(options: {
       toolCallState = options.sessionState.pendingToolCalls.get(toolEvent.toolCallId);
       if (toolCallState) {
         toolCallState.toolName ??= toolEvent.toolName;
-        toolCallState.rawOutput = mergeCapturedRawOutput(
-          toolCallState,
-          toolEvent.partialResult,
-          "update",
-        );
+        toolCallState.rawOutput = toolEvent.partialResult;
       }
     } else if (eventType === "tool_execution_end") {
       const toolEvent = event as {
@@ -155,7 +137,7 @@ export async function executePrompt(options: {
       toolCallState = options.sessionState.pendingToolCalls.get(toolEvent.toolCallId);
       if (toolCallState) {
         toolCallState.toolName ??= toolEvent.toolName;
-        toolCallState.rawOutput = mergeCapturedRawOutput(toolCallState, toolEvent.result, "end");
+        toolCallState.rawOutput = toolEvent.result;
         const firstChangedLine = extractFirstChangedLine(toolEvent.result);
         if (firstChangedLine !== undefined) {
           toolCallState.firstChangedLine = firstChangedLine;
@@ -213,11 +195,9 @@ export async function executePrompt(options: {
       }
     }
 
-    const finishedToolCallId = completedToolCallId;
-    const finishedToolCallState = toolCallState;
     const shouldRefreshUsageAfterEvent = eventType === "tool_execution_end";
-    if (finishedToolCallId) {
-      options.sessionState.pendingToolCalls.delete(finishedToolCallId);
+    if (completedToolCallId) {
+      options.sessionState.pendingToolCalls.delete(completedToolCallId);
     }
 
     enqueueSessionUpdate(async () => {
@@ -236,10 +216,6 @@ export async function executePrompt(options: {
         }
       } catch (err) {
         console.error(`Failed to send session update for ${options.request.sessionId}:`, err);
-      } finally {
-        if (finishedToolCallState && finishedToolCallId) {
-          await releaseToolCallResources(finishedToolCallState);
-        }
       }
     });
   });

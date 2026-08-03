@@ -34,7 +34,6 @@ export function createMockSession() {
 export function createMockConnection() {
   return {
     sessionUpdate: vi.fn(async () => undefined),
-    readTextFile: vi.fn(async () => ({ content: "" })),
   } as any;
 }
 

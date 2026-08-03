@@ -10,7 +10,6 @@ export type {
   AcpSessionState,
   AcpToolCallState,
   AcpToolCallDiff,
-  AcpBashTerminalRawOutput,
   AcpClientCapabilitiesSnapshot,
   ModelInfo,
   SessionConfigOptions,
@@ -43,11 +42,7 @@ export type { ThinkingLevel, AgentEvent } from "./adapter/types.js";
 
 export type { Model, Provider, AssistantMessageEvent } from "./adapter/types.js";
 
-export {
-  captureClientCapabilities,
-  getMissingRequiredClientCapabilities,
-  createMissingClientCapabilitiesMessage,
-} from "./adapter/types.js";
+export { captureClientCapabilities } from "./adapter/types.js";
 
 // Re-export session config functions
 export {
@@ -77,7 +72,6 @@ export {
   createStructuredToolCallContent,
   createToolCallContent,
   createDiffContent,
-  createTerminalContent,
 } from "./adapter/AcpEventMapper.js";
 
 // Re-export AcpAgent

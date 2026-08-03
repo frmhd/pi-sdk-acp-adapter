@@ -12,11 +12,7 @@ import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 import { createDiffContent, createToolCallContent, mapStopReason, mapToolKind } from "./types.js";
-import {
-  extractTextFromUnknown,
-  mapTerminalToolContent,
-  mapToolResultContent,
-} from "./events/toolContent.js";
+import { extractTextFromUnknown, mapToolResultContent } from "./events/toolContent.js";
 import {
   buildToolLocations,
   buildToolMeta,
@@ -194,10 +190,7 @@ export function mapToolExecutionUpdate(
   const toolUpdate: ToolCallUpdate = {
     toolCallId: event.toolCallId,
     status: "in_progress",
-    content:
-      (toolName === "bash" ? mapTerminalToolContent(context) : undefined) ??
-      mutationDiffContent ??
-      mapToolResultContent(event.partialResult),
+    content: mutationDiffContent ?? mapToolResultContent(event.partialResult),
     rawOutput: context?.toolCallState?.rawOutput ?? event.partialResult,
     title: toolName ? buildToolTitle(toolName, args, context) : undefined,
     locations: buildToolLocations(toolName, args, context),
@@ -230,9 +223,7 @@ export function mapToolExecutionEnd(
 
   let content: ToolCallContent[] | undefined;
 
-  if (toolName === "bash") {
-    content = mapTerminalToolContent(context) ?? mapToolResultContent(event.result);
-  } else if (!event.isError && context?.toolCallState?.diff) {
+  if (!event.isError && context?.toolCallState?.diff) {
     const diff = context.toolCallState.diff;
     content = [createDiffContent(diff.path, diff.newText, diff.oldText ?? undefined)];
   } else {
@@ -345,5 +336,4 @@ export {
   createStructuredToolCallContent,
   createToolCallContent,
   createDiffContent,
-  createTerminalContent,
 } from "./types.js";

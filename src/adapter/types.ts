@@ -48,50 +48,12 @@ export interface AcpToolCallDiff {
   newText: string;
 }
 
-/** Raw terminal execution metadata retained for ACP-backed bash calls. */
-export interface AcpBashTerminalRawOutput {
-  /** Marker for bash executions backed by an ACP terminal. */
-  type: "acp_terminal";
-  /** The original Pi bash tool input. */
-  input: {
-    command: string;
-    timeout: number | null;
-  };
-  /** The ACP terminal request command + args sent to the client. */
-  execution: {
-    command: string;
-    args: string[];
-    cwd: string;
-    outputByteLimit: number | null;
-  };
-  /** The ACP terminal id associated with the tool call. */
-  terminalId: string;
-  /** Latest terminal output retained by the ACP client. */
-  output?: string;
-  /** Whether terminal output was truncated by the ACP client. */
-  truncated?: boolean;
-  /** Final process exit code, if known. */
-  exitCode?: number | null;
-  /** Final terminating signal, if any. */
-  signal?: string | null;
-  /** Pi bash normally reports this when it writes a temp file; ACP terminals do not. */
-  fullOutputPath?: string | null;
-  /** Latest partial Pi tool payload, retained for debugging. */
-  piPartialResult?: unknown;
-  /** Final Pi tool payload, retained for debugging. */
-  piResult?: unknown;
-}
-
 /** Mutable adapter state captured for a single tool call. */
 export interface AcpToolCallState {
   /** Pi tool name, e.g. read/write/edit/bash. */
   toolName?: string;
   /** Absolute file path when the tool targets a single file. */
   path?: string;
-  /** ACP terminal id when the tool is backed by a client terminal. */
-  terminalId?: string;
-  /** Deferred cleanup hook for terminal-backed tool calls. */
-  releaseTerminal?: () => Promise<void>;
   /** File diff metadata for edit/write rendering. */
   diff?: AcpToolCallDiff;
   /** First changed line reported by Pi edit details. */
@@ -150,18 +112,12 @@ export interface AcpSessionState {
 // Client Capabilities
 // =============================================================================
 
-/** Normalized ACP client capabilities used by the adapter/runtime layers. */
+/** Normalized ACP client capabilities used by the adapter layers. */
 export interface AcpClientCapabilitiesSnapshot {
   /** Raw client capabilities from initialize(). */
   raw: ClientCapabilities | null;
   /** Client implementation info (name, version, title). */
   clientInfo: Implementation | null;
-  /** Whether the client can service fs/read_text_file. */
-  supportsReadTextFile: boolean;
-  /** Whether the client can service fs/write_text_file. */
-  supportsWriteTextFile: boolean;
-  /** Whether the client can service terminal methods. */
-  supportsTerminal: boolean;
   /** Whether the client opted into ACP terminal auth methods. */
   supportsTerminalAuth: boolean;
 }
@@ -179,35 +135,9 @@ export function captureClientCapabilities(
   return {
     raw: capabilities ?? null,
     clientInfo: clientInfo ?? null,
-    supportsReadTextFile: capabilities?.fs?.readTextFile === true,
-    supportsWriteTextFile: capabilities?.fs?.writeTextFile === true,
-    supportsTerminal: capabilities?.terminal === true,
     supportsTerminalAuth:
       capabilities?.auth?.terminal === true || hasLegacyTerminalAuthCapability(capabilities),
   };
-}
-
-/**
- * Back-compat helper retained for the public API.
- *
- * ACP client capabilities are no longer strictly required. The adapter selects
- * ACP-backed or local Pi tool backends per session based on what the client
- * advertises, so initialization/session creation can proceed even when ACP fs or
- * terminal features are unavailable.
- */
-export function getMissingRequiredClientCapabilities(
-  _capabilities: AcpClientCapabilitiesSnapshot,
-): string[] {
-  return [];
-}
-
-/** Create a user-facing compatibility message for capability-based fallback mode. */
-export function createMissingClientCapabilitiesMessage(missing: string[]): string {
-  if (missing.length === 0) {
-    return "Pi Coding Agent selects ACP-backed or local tool backends at runtime based on the connected client's capabilities.";
-  }
-
-  return `Pi Coding Agent will fall back to local tool backends for unsupported ACP capabilities: ${missing.join(", ")}.`;
 }
 
 // =============================================================================
@@ -338,14 +268,6 @@ export function createDiffContent(
     _meta: {
       kind: !oldText ? "add" : "edit",
     },
-  } as ToolCallContent;
-}
-
-/** Create tool call content with terminal */
-export function createTerminalContent(terminalId: string): ToolCallContent {
-  return {
-    type: "terminal",
-    terminalId,
   } as ToolCallContent;
 }
 

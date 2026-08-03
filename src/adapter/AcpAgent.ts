@@ -52,10 +52,7 @@ import {
   refreshSessionUsage as refreshSessionUsageForSession,
   scheduleInitialSessionUpdates as scheduleInitialUpdates,
 } from "./agent/sessionRefresh.js";
-import {
-  getOrCreateToolCallState,
-  releasePendingToolCallResources,
-} from "./agent/toolCallState.js";
+import { getOrCreateToolCallState, clearPendingToolCallState } from "./agent/toolCallState.js";
 import { getModelThinkingPreference } from "./session/modelPreferences.js";
 import type { CreateAcpAgentRuntimeOptions } from "../runtime/AcpAgentRuntime.js";
 import {
@@ -252,7 +249,6 @@ export class AcpAgent implements Agent {
       connection: this.connection,
       request: params,
       sessionState,
-      clientCapabilities: this.clientCapabilities,
       refreshSessionUsage: (state, force) => this.refreshSessionUsage(state, force),
       refreshSessionMetadata: (state, force) => this.refreshSessionMetadata(state, force),
       refreshAvailableCommands: (state, force) => this.refreshAvailableCommands(state, force),
@@ -400,12 +396,8 @@ export class AcpAgent implements Agent {
     const createSessionRuntimeOptions: CreateAcpAgentRuntimeOptions = {
       cwd: options.cwd,
       agentDir: this.config.agentDir,
-      additionalDirectories: options.additionalDirectories,
       modelRuntime: this.config.modelRuntime,
-      acpConnection: this.connection,
-      clientCapabilities: this.clientCapabilities,
       sessionManager: options.sessionManager,
-      sessionId,
       onToolCallStateCaptured: (toolCallId, update) => {
         Object.assign(getOrCreateToolCallState(sessionState, toolCallId), update);
       },
@@ -446,7 +438,7 @@ export class AcpAgent implements Agent {
       this.sessions.set(sessionId, sessionState);
       return sessionState;
     } catch (error) {
-      await releasePendingToolCallResources(sessionState);
+      clearPendingToolCallState(sessionState);
       throw new Error(
         `Failed to initialize session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -515,7 +507,7 @@ export class AcpAgent implements Agent {
       }
 
       sessionState.dispose?.();
-      await releasePendingToolCallResources(sessionState);
+      clearPendingToolCallState(sessionState);
       sessionState.session = null;
       sessionState.dispose = null;
       sessionState.getSlashCommands = undefined;

@@ -30,58 +30,38 @@ describe("AcpAgent initialize", () => {
     expect(response.agentCapabilities?.sessionCapabilities?.resume).toEqual({});
     expect(response.agentCapabilities?.sessionCapabilities?.close).toEqual({});
     expect(response.agentCapabilities?.sessionCapabilities?.additionalDirectories).toEqual({});
-    expect(agent.getClientCapabilities()).toMatchObject({
-      supportsReadTextFile: true,
-      supportsWriteTextFile: true,
-      supportsTerminal: true,
+    // Filesystem/terminal execution capabilities are no longer surfaced; only
+    // terminal auth and client identity remain.
+    expect(agent.getClientCapabilities()).toEqual({
+      raw: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: true,
+      },
+      clientInfo: null,
+      supportsTerminalAuth: false,
     });
   });
 
-  test("allows initialization when ACP filesystem capabilities are missing", async () => {
+  test("retains clientInfo and terminal auth opt-in from initialize", async () => {
     const agent = createTestAgent();
 
-    await expect(
-      agent.initialize({
-        protocolVersion: 1,
-        clientCapabilities: {
-          fs: { readTextFile: true, writeTextFile: false },
-          terminal: false,
-        },
-      }),
-    ).resolves.toMatchObject({
+    await agent.initialize({
       protocolVersion: 1,
+      clientInfo: { name: "zed", title: "Zed", version: "1.0" },
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: true,
+        auth: { terminal: true },
+      },
     });
 
     expect(agent.getClientCapabilities()).toMatchObject({
-      supportsReadTextFile: true,
-      supportsWriteTextFile: false,
-      supportsTerminal: false,
+      clientInfo: { name: "zed", title: "Zed", version: "1.0" },
+      supportsTerminalAuth: true,
     });
   });
 
-  test("allows initialization without terminal support", async () => {
-    const agent = createTestAgent();
-
-    await expect(
-      agent.initialize({
-        protocolVersion: 1,
-        clientCapabilities: {
-          fs: { readTextFile: true, writeTextFile: true },
-          terminal: false,
-        },
-      }),
-    ).resolves.toMatchObject({
-      protocolVersion: 1,
-    });
-
-    expect(agent.getClientCapabilities()).toMatchObject({
-      supportsReadTextFile: true,
-      supportsWriteTextFile: true,
-      supportsTerminal: false,
-    });
-  });
-
-  test("passes captured client capabilities through to runtime creation", async () => {
+  test("does not pass filesystem/terminal execution surface into runtime creation", async () => {
     const createRuntime = vi.fn(async (_options: any) => ({
       session: createMockSession(),
       dispose: vi.fn(),
@@ -103,16 +83,16 @@ describe("AcpAgent initialize", () => {
     expect(createRuntime).toHaveBeenCalledTimes(1);
     expect(createRuntime).toHaveBeenCalledWith(
       expect.objectContaining({
-        clientCapabilities: expect.objectContaining({
-          supportsReadTextFile: true,
-          supportsWriteTextFile: true,
-          supportsTerminal: true,
-        }),
+        cwd: "/tmp/project",
+        onToolCallStateCaptured: expect.any(Function),
       }),
     );
+    expect(createRuntime.mock.calls[0][0]).not.toHaveProperty("acpConnection");
+    expect(createRuntime.mock.calls[0][0]).not.toHaveProperty("clientCapabilities");
+    expect(createRuntime.mock.calls[0][0]).not.toHaveProperty("sessionId");
   });
 
-  test("creates sessions even when ACP fs capabilities are missing", async () => {
+  test("creates sessions without any ACP client capability requirements", async () => {
     const createRuntime = vi.fn(async (_options: any) => ({
       session: createMockSession(),
       dispose: vi.fn(),
@@ -121,24 +101,13 @@ describe("AcpAgent initialize", () => {
 
     await agent.initialize({
       protocolVersion: 1,
-      clientCapabilities: {
-        fs: { readTextFile: false, writeTextFile: false },
-        terminal: false,
-      },
+      clientCapabilities: {},
     });
 
     await expect(agent.newSession({ cwd: "/tmp/project" } as any)).resolves.toMatchObject({
       sessionId: expect.any(String),
     });
-    expect(createRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        clientCapabilities: expect.objectContaining({
-          supportsReadTextFile: false,
-          supportsWriteTextFile: false,
-          supportsTerminal: false,
-        }),
-      }),
-    );
+    expect(createRuntime).toHaveBeenCalledTimes(1);
   });
 
   test("session lifecycle methods still require initialize before use", async () => {

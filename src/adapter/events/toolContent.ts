@@ -1,8 +1,7 @@
 import type { ToolCallContent } from "@agentclientprotocol/sdk";
 
-import { createTerminalContent, createToolCallContent } from "../types.js";
+import { createToolCallContent } from "../types.js";
 import { mapPiContentBlockToAcp } from "./contentBlocks.js";
-import type { ToolEventMappingContext } from "./toolPresentation.js";
 
 export function mapStructuredToolResultContent(result: unknown): ToolCallContent[] | undefined {
   if (typeof result !== "object" || result === null) {
@@ -79,11 +78,4 @@ export function mapToolResultContent(result: unknown): ToolCallContent[] | undef
 
   const text = extractTextFromUnknown(result);
   return text ? [createToolCallContent(text)] : undefined;
-}
-
-export function mapTerminalToolContent(
-  context?: ToolEventMappingContext,
-): ToolCallContent[] | undefined {
-  const terminalId = context?.toolCallState?.terminalId;
-  return terminalId ? [createTerminalContent(terminalId)] : undefined;
 }

@@ -138,137 +138,49 @@ describe("AcpAgent prompt error handling", () => {
   });
 });
 
-describe("AcpAgent prompt tool state tracking", () => {
-  test("releases terminal-backed bash tool calls after the final ACP update", async () => {
+describe("AcpAgent prompt text passthrough", () => {
+  test("passes prompt text to Pi unchanged without @path preprocessing", async () => {
     const connection = createMockConnection();
     const mockSession = createMockSession();
-    const releaseTerminal = vi.fn(async () => undefined);
-    let onEvent: ((event: any) => void) | undefined;
-    let runtimeOptions: any;
 
-    mockSession.subscribe = vi.fn((callback: (event: any) => void) => {
-      onEvent = callback;
-      return () => {};
-    });
+    mockSession.prompt = vi.fn(async () => undefined);
 
-    mockSession.prompt = vi.fn(async () => {
-      onEvent?.({
-        type: "tool_execution_start",
-        toolCallId: "tool-bash",
-        toolName: "bash",
-        args: { command: "echo hi" },
-      });
-
-      runtimeOptions.onToolCallStateCaptured("tool-bash", {
-        toolName: "bash",
-        terminalId: "term-1",
-        releaseTerminal,
-        rawOutput: {
-          type: "acp_terminal",
-          terminalId: "term-1",
-          input: { command: "echo hi", timeout: null },
-          execution: {
-            command: "echo hi",
-            args: [],
-            cwd: "/tmp/project",
-            outputByteLimit: 51200,
-          },
-          output: "hi\n",
-          truncated: false,
-        },
-      });
-
-      onEvent?.({
-        type: "tool_execution_update",
-        toolCallId: "tool-bash",
-        toolName: "bash",
-        partialResult: { content: [], details: undefined },
-      });
-
-      runtimeOptions.onToolCallStateCaptured("tool-bash", {
-        rawOutput: {
-          type: "acp_terminal",
-          terminalId: "term-1",
-          input: { command: "echo hi", timeout: null },
-          execution: {
-            command: "echo hi",
-            args: [],
-            cwd: "/tmp/project",
-            outputByteLimit: 51200,
-          },
-          output: "hi\n",
-          truncated: false,
-          exitCode: 0,
-          signal: null,
-        },
-      });
-
-      onEvent?.({
-        type: "tool_execution_end",
-        toolCallId: "tool-bash",
-        toolName: "bash",
-        result: { content: [{ type: "text", text: "hi" }] },
-        isError: false,
-      });
-    });
-
-    const createRuntime = vi.fn(async (options: any) => {
-      runtimeOptions = options;
-      return {
-        session: mockSession,
-        dispose: vi.fn(),
-      };
-    });
+    const createRuntime = vi.fn(async () => ({
+      session: mockSession,
+      dispose: vi.fn(),
+    }));
 
     const agent = createTestAgent(connection, createRuntime);
 
     await agent.initialize({
       protocolVersion: 1,
-      clientCapabilities: {
-        fs: { readTextFile: true, writeTextFile: true },
-        terminal: true,
-      },
+      clientCapabilities: {},
     });
 
     const { sessionId } = await agent.newSession({ cwd: "/tmp/project" } as any);
 
+    const promptText = "Explain @src/main.ts and run ls";
     await agent.prompt({
       sessionId,
-      prompt: [{ type: "text", text: "Run a command" }],
+      prompt: [{ type: "text", text: promptText }],
     } as any);
 
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const updates = connection.sessionUpdate.mock.calls.map(
-      ([notification]: [any]) => notification.update,
+    expect(mockSession.prompt).toHaveBeenCalledWith(promptText, undefined);
+    expect(connection.sessionUpdate).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          sessionUpdate: "agent_message_chunk",
+          content: expect.objectContaining({
+            text: expect.stringContaining("--- @src/main.ts ---"),
+          }),
+        }),
+      }),
     );
-
-    const inProgress = updates.find(
-      (update: any) =>
-        update.sessionUpdate === "tool_call_update" &&
-        update.toolCallId === "tool-bash" &&
-        update.status === "in_progress",
-    );
-    const completed = updates.find(
-      (update: any) =>
-        update.sessionUpdate === "tool_call_update" &&
-        update.toolCallId === "tool-bash" &&
-        update.status === "completed",
-    );
-
-    expect(inProgress.content).toEqual([{ type: "terminal", terminalId: "term-1" }]);
-    expect(completed.content).toEqual([{ type: "terminal", terminalId: "term-1" }]);
-    expect(completed.rawOutput).toMatchObject({
-      terminalId: "term-1",
-      exitCode: 0,
-      piResult: { content: [{ type: "text", text: "hi" }] },
-    });
-    expect(releaseTerminal).toHaveBeenCalledTimes(1);
-    expect(agent.getSession(sessionId)?.pendingToolCalls.size).toBe(0);
   });
+});
 
-  test("keeps local-fallback bash raw output as plain Pi payloads when no ACP terminal is present", async () => {
+describe("AcpAgent prompt tool state tracking", () => {
+  test("maps bash updates and completion to plain ACP content", async () => {
     const connection = createMockConnection();
     const mockSession = createMockSession();
     let onEvent: ((event: any) => void) | undefined;
@@ -279,32 +191,32 @@ describe("AcpAgent prompt tool state tracking", () => {
     });
 
     const partialResult = {
-      content: [{ type: "text", text: "partial output" }],
-      details: undefined,
+      content: [{ type: "text", text: "hi\n" }],
+      details: { truncated: false },
     };
     const finalResult = {
-      content: [{ type: "text", text: "final output" }],
-      details: undefined,
+      content: [{ type: "text", text: "hi\n" }],
+      details: { truncated: false, exitCode: 0 },
     };
 
     mockSession.prompt = vi.fn(async () => {
       onEvent?.({
         type: "tool_execution_start",
-        toolCallId: "tool-bash-local",
+        toolCallId: "tool-bash",
         toolName: "bash",
         args: { command: "echo hi" },
       });
 
       onEvent?.({
         type: "tool_execution_update",
-        toolCallId: "tool-bash-local",
+        toolCallId: "tool-bash",
         toolName: "bash",
         partialResult,
       });
 
       onEvent?.({
         type: "tool_execution_end",
-        toolCallId: "tool-bash-local",
+        toolCallId: "tool-bash",
         toolName: "bash",
         result: finalResult,
         isError: false,
@@ -320,17 +232,14 @@ describe("AcpAgent prompt tool state tracking", () => {
 
     await agent.initialize({
       protocolVersion: 1,
-      clientCapabilities: {
-        fs: { readTextFile: true, writeTextFile: true },
-        terminal: false,
-      },
+      clientCapabilities: {},
     });
 
     const { sessionId } = await agent.newSession({ cwd: "/tmp/project" } as any);
 
     await agent.prompt({
       sessionId,
-      prompt: [{ type: "text", text: "Run a local fallback command" }],
+      prompt: [{ type: "text", text: "Run a command" }],
     } as any);
 
     const updates = connection.sessionUpdate.mock.calls.map(
@@ -340,20 +249,26 @@ describe("AcpAgent prompt tool state tracking", () => {
     const inProgress = updates.find(
       (update: any) =>
         update.sessionUpdate === "tool_call_update" &&
-        update.toolCallId === "tool-bash-local" &&
+        update.toolCallId === "tool-bash" &&
         update.status === "in_progress",
     );
     const completed = updates.find(
       (update: any) =>
         update.sessionUpdate === "tool_call_update" &&
-        update.toolCallId === "tool-bash-local" &&
+        update.toolCallId === "tool-bash" &&
         update.status === "completed",
     );
 
+    expect(inProgress.content).toEqual([
+      { type: "content", content: { type: "text", text: "hi\n" } },
+    ]);
     expect(inProgress.rawOutput).toEqual(partialResult);
+    expect(completed.content).toEqual([
+      { type: "content", content: { type: "text", text: "hi\n" } },
+    ]);
     expect(completed.rawOutput).toEqual(finalResult);
-    expect(completed.rawOutput).not.toHaveProperty("piPartialResult");
-    expect(completed.rawOutput).not.toHaveProperty("piResult");
+    expect(completed.content).not.toEqual([{ type: "terminal", terminalId: expect.any(String) }]);
+    expect(agent.getSession(sessionId)?.pendingToolCalls.size).toBe(0);
   });
 
   test("serializes edit tool updates so in_progress reaches ACP before completion", async () => {
